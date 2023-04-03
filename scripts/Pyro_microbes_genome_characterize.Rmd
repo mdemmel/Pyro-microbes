@@ -1,0 +1,143 @@
+---
+title: "paprica_exploration"
+output: html_document
+---
+
+```{r}
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+```
+
+
+```{r}
+# read in data
+load("~/Desktop/PhD/Pyro_Project/2022.6.29_pyro.Rdata")
+
+head(data.bac) # mean genome parameters for each sample (genome size, etc.)
+head(taxa.bac) # taxa table; # maps edge numbers to the name of the lowest consensus taxonomy
+head(map.bac) # where taxa were placed- maps sequence to unique edge where it was placed
+head(tally.bac)
+dim(tally.bac)
+tally.bac[1:10, 1:10] # otu_table w/ taxa (row = samples) - best community structure?
+dim(unique.bac)
+unique.bac[1:10, 1:10] # otu table w/ sequences (row = samples) - 
+# relative abundance of unique sequences
+```
+# get metadata
+```{r}
+metadat <- read_excel("~/Desktop/PhD/Pyro_Project/pyro_metadata.xlsx")
+
+## add metadat to new dataframe
+rownames(metadat) <- metadat$Sample_Name
+data.bac.new <- data.bac; data.bac.new$Sample_Name <- gsub("_16S.16S.exp.", "", rownames(data.bac.new))
+data.bac.new <- left_join(data.bac.new, metadat)
+
+```
+
+
+# genome characteristics - 16S Copy Number
+```{r}
+data.bac.new <- data.bac.new %>% filter(!(is.na(sample_type1)) & sample_type1 != 'mock') 
+
+# copy number meaning??
+data.bac.new %>% ggplot(aes(x = sample_type1, y = n16S.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("16S gene copy number")
+
+data.bac.new %>% 
+  ggplot(aes(x = plant_mass, color = sample_type1, y = n16S.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + ggtitle("16S gene copy number")
+
+# for just water over time
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = time, y = n16S.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("16S gene copy number")
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = plant_mass, color = Treatment, y = n16S.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + facet_wrap(.~time) + ggtitle("16S gene copy number")
+```
+
+
+```{r}
+## number of coding sequences
+data.bac.new %>% ggplot(aes(x = sample_type1, y = ncds.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("number of coding sequences")
+data.bac.new %>% 
+  ggplot(aes(x = plant_mass, color = sample_type1, y = ncds.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + ggtitle("1number of coding sequences")
+
+# for just water over time
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = time, y = ncds.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("coding seqs")
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = plant_mass, color = Treatment, y = ncds.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + facet_wrap(.~time) + ggtitle("coding seqs")
+```
+
+
+```{r}
+# genome_size
+data.bac.new %>% ggplot(aes(x = sample_type1, y = genome_size.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("genome size")
+data.bac.new %>% 
+  ggplot(aes(x = plant_mass, color = sample_type1, y = genome_size.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + ggtitle("genome size")
+
+# for just water over time
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = time, y = genome_size.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("genome size")
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = plant_mass, color = Treatment, y = genome_size.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + facet_wrap(.~time) + ggtitle("genome size")
+```
+
+
+```{r}
+# plasticity
+data.bac.new %>% ggplot(aes(x = sample_type1, y = phi.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("plasticity")
+data.bac.new %>% filter(sample_type2 != 'mock') %>%
+  ggplot(aes(x = plant_mass, color = sample_type1, y = phi.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + ggtitle("plasticity")
+
+# for just water over time
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = time, y = phi.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("plasticity")
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = plant_mass, color = Treatment, y = phi.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + facet_wrap(.~time) + ggtitle("plasticity")
+```
+
+
+```{r}
+# predicted doubling time for edge using default temperature
+data.bac.new %>% ggplot(aes(x = sample_type1, y = gRodon.d.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("predicted edge doubling time")
+data.bac.new %>% 
+  ggplot(aes(x = plant_mass, color = sample_type1, y = gRodon.d.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + ggtitle("predicted edge doubling time")
+
+# for just water over time
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = time, y = gRodon.d.mean, shape=Treatment)) + geom_boxplot() + 
+  geom_point(aes(color=plant_mass), position=position_jitterdodge()) + ggtitle("predicted edge doubling time")
+data.bac.new %>% filter(sample_type1 == 'water') %>%
+  ggplot(aes(x = plant_mass, color = Treatment, y = gRodon.d.mean, shape=Treatment)) + 
+  geom_point() + 
+  geom_smooth(aes(linetype=Treatment),se=F) + facet_wrap(.~time) + ggtitle("predicted edge doubling time")
+
+```
+
+
