@@ -22,11 +22,162 @@ knitr::opts_chunk$set(warning=FALSE, message=FALSE, fig.align='center')
 if (!require("pacman")) install.packages("pacman") # for rapid install if not in library
 
 # use pacman to load all the packages you are missing!
-pacman::p_load('knitr', 'lme4', 'lmerTest', 'tidyverse', 'magrittr', 'effects', 'plyr', 'dplyr', 
-               'plotrix', 'car',"gridExtra", "cowplot", "tools", "doBy", "ggplot2", "nlme", "reshape2",
-               "mgcv", "vegan")
+pacman::p_load('knitr', 'lme4', 'lmerTest', 'tidyverse', 'magrittr', 'effects', 'plyr', 'dplyr', 'plotrix', 'car',"gridExtra", "cowplot", "tools", "mgcv", "gratia", "MASS", "stats", "tidymv", "sjstats", "coin", "emmeans")
 
-rm(list=ls())
+Fig.formatting<-(theme_classic()) +
+  theme(text=element_text(size=10),
+        axis.line=element_blank(),
+        legend.text.align = 0,
+        legend.text=element_text(size=10),
+        #legend.title = element_blank(),
+        panel.border = element_rect(fill=NA, colour = "black", size=1),
+        aspect.ratio=1, 
+        axis.ticks.length=unit(0.25, "cm"),
+        axis.text.y=element_text(
+          margin=unit(c(0.5, 0.5, 0.5, 0.5), "cm"), colour="black", size=10), 
+        axis.text.x=element_text(
+          margin=unit(c(0.5, 0.5, 0.5, 0.5), "cm"), colour="black", size=8)) +
+  theme(legend.key.size = unit(0.4, "cm")) +
+  theme(aspect.ratio=1.3) +
+  theme(panel.spacing=unit(c(0, 0, 0, 0), "cm"))
+
+```
+
+### FCM
+```{r}
+fcm.df<-read.csv("data/pyro_fcm_data.csv")
+
+cols<-c("Time", "Tank", "Treatment")
+fcm.df[cols] <- lapply(fcm.df[cols], factor) # make all these factors
+
+### Time 1
+######## T1 model
+m1.AF.T1<-gam(af_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time=="T1", data = fcm.df, method = "REML")
+
+m2.AF.T1<-gam(af_sum ~  Treatment + s(plant.mass..g), subset = Time=="T1", data = fcm.df, method = "REML")
+
+m3.AF.T1<-gam(af_sum ~  s(plant.mass..g), subset = Time=="T1", data = fcm.df, method = "REML")
+
+T1.AF.AIC<-AIC(m1.AF.T1, m2.AF.T1, m3.AF.T1)
+# best is smoother solo
+
+summary(m3.AF.T1)
+anova.gam(m3.AF.T1)
+gam.check(m3.AF.T1, rep=1000)
+draw(m3.AF.T1)
+concrvity(m3.AF.T1)
+par(mfrow = c(2, 2))
+plot(m3.AF.T1, all.terms = TRUE, page=1)
+
+# model predictions
+AF.diff.T1<-plot_difference(
+  m1.AF.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+AF.T1.mod.plot<-
+  plot_smooths(
+  model = m3.AF.T1,
+  series = plant.mass..g,
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time=="T1"),], 
+             aes(x=plant.mass..g, y=af_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 4000000)) +
+  ggtitle("Day-10") +
+  ylab("AF sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+### Time 3
+######## T3 model
+m1.AF.T3<-gam(af_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time=="T3", data = fcm.df, method = "REML")
+
+m2.AF.T3<-gam(af_sum ~  Treatment + s(plant.mass..g), subset = Time=="T3", data = fcm.df, method = "REML")
+
+m3.AF.T3<-gam(af_sum ~  s(plant.mass..g), subset = Time=="T3", data = fcm.df, method = "REML")
+
+T3.AF.AIC<-AIC(m1.AF.T3, m2.AF.T3, m3.AF.T3)
+# best is smoother solo
+
+summary(m3.AF.T3)
+anova.gam(m3.AF.T3)
+gam.check(m3.AF.T3, rep=1000)
+draw(m3.AF.T3)
+concrvity(m3.AF.T3)
+par(mfrow = c(2, 2))
+plot(m3.AF.T3, all.terms = TRUE, page=1)
+
+# model predictions
+AF.diff.T3<-plot_difference(
+  m1.AF.T3,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+AF.T3.mod.plot<-
+  plot_smooths(
+  model = m3.AF.T3,
+  series = plant.mass..g,
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time=="T3"),], 
+             aes(x=plant.mass..g, y=af_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 1500000)) +
+  ggtitle("Day-59") +
+  ylab("AF sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+### Time 4
+######## T4 model
+m1.AF.T4<-gam(af_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time=="T4", data = fcm.df, method = "REML")
+
+m2.AF.T4<-gam(af_sum ~  Treatment + s(plant.mass..g), subset = Time=="T4", data = fcm.df, method = "REML")
+
+m3.AF.T4<-gam(af_sum ~  s(plant.mass..g), subset = Time=="T4", data = fcm.df, method = "REML")
+
+T4.AF.AIC<-AIC(m1.AF.T4, m2.AF.T4, m3.AF.T4)
+# best is smoother solo
+
+summary(m1.AF.T4)
+anova.gam(m1.AF.T4)
+gam.check(m1.AF.T4, rep=1000)
+draw(m1.AF.T4)
+concrvity(m1.AF.T4)
+par(mfrow = c(2, 2))
+plot(m1.AF.T4, all.terms = TRUE, page=1)
+
+# model predictions
+AF.diff.T4<-plot_difference(
+  m1.AF.T4,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+AF.T4.mod.plot<-
+  plot_smooths(
+  model = m1.AF.T4,
+  series = plant.mass..g,
+  comparison = Treatment
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time=="T4"),], 
+             aes(x=plant.mass..g, y=af_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 3000000)) +
+  ggtitle("Day-89") +
+  ylab("AF sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
 
 ```
 
