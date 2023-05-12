@@ -49,7 +49,10 @@ fcm.df<-read.csv("data/pyro_fcm_data.csv")
 
 cols<-c("Time", "Tank", "Treatment")
 fcm.df[cols] <- lapply(fcm.df[cols], factor) # make all these factors
+```
 
+Do Autofluorescence
+```{r FCM AF, results='hide', fig.show='hide'}
 ### Time 1
 ######## T1 model
 m1.AF.T1<-gam(af_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time=="T1", data = fcm.df, method = "REML")
@@ -129,7 +132,7 @@ AF.T3.mod.plot<-
   geom_point(data=fcm.df[(fcm.df$Time=="T3"),], 
              aes(x=plant.mass..g, y=af_sum, color=Treatment)) +
   scale_color_manual(values = c("brown1", "mediumseagreen")) + 
-  coord_cartesian(ylim=c(0, 1500000)) +
+  coord_cartesian(ylim=c(0, 4000000)) +
   ggtitle("Day-59") +
   ylab("AF sum") +
   xlab("plant material (g)") +
@@ -173,13 +176,182 @@ AF.T4.mod.plot<-
   geom_point(data=fcm.df[(fcm.df$Time=="T4"),], 
              aes(x=plant.mass..g, y=af_sum, color=Treatment)) +
   scale_color_manual(values = c("brown1", "mediumseagreen")) + 
-  coord_cartesian(ylim=c(0, 3000000)) +
+  coord_cartesian(ylim=c(0, 4000000)) +
   ggtitle("Day-89") +
   ylab("AF sum") +
   xlab("plant material (g)") +
   Fig.formatting
 
 ```
+
+Now do syber green stained
+```{r fcm sg, results='hide', fig.show='hide'}
+### Time 1
+######## T1 model
+m1.SG.T1<-gam(sg_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time=="T1", data = fcm.df, method = "REML")
+
+m2.SG.T1<-gam(sg_sum ~  Treatment + s(plant.mass..g), subset = Time=="T1", data = fcm.df, method = "REML")
+
+m3.SG.T1<-gam(sg_sum ~  s(plant.mass..g), subset = Time=="T1", data = fcm.df, method = "REML")
+
+T1.SG.AIC<-AIC(m1.SG.T1, m2.SG.T1, m3.SG.T1)
+# best is smoother solo
+
+summary(m3.SG.T1)
+anova.gam(m3.SG.T1)
+gam.check(m3.SG.T1, rep=1000)
+draw(m3.SG.T1)
+concrvity(m3.SG.T1)
+par(mfrow = c(2, 2))
+plot(m3.SG.T1, all.terms = TRUE, page=1)
+
+# model predictions
+SG.diff.T1<-plot_difference(
+  m1.SG.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+SG.T1.mod.plot<-
+  plot_smooths(
+  model = m3.SG.T1,
+  series = plant.mass..g,
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time=="T1"),], 
+             aes(x=plant.mass..g, y=sg_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30000000)) +
+  ggtitle("Day-10") +
+  ylab("SG sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+### Time 3
+######## T3 model
+m1.SG.T3<-gam(sg_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time=="T3", data = fcm.df, method = "REML")
+
+m2.SG.T3<-gam(sg_sum ~  Treatment + s(plant.mass..g), subset = Time=="T3", data = fcm.df, method = "REML")
+
+m3.SG.T3<-gam(sg_sum ~  s(plant.mass..g), subset = Time=="T3", data = fcm.df, method = "REML")
+
+T3.SG.AIC<-AIC(m1.SG.T3, m2.SG.T3, m3.SG.T3)
+# best is smoother solo
+
+summary(m3.SG.T3)
+anova.gam(m3.SG.T3)
+gam.check(m3.SG.T3, rep=1000)
+draw(m3.SG.T3)
+concrvity(m3.SG.T3)
+par(mfrow = c(2, 2))
+plot(m3.SG.T3, all.terms = TRUE, page=1)
+
+# model predictions
+SG.diff.T3<-plot_difference(
+  m1.SG.T3,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+SG.T3.mod.plot<-
+  plot_smooths(
+  model = m3.SG.T3,
+  series = plant.mass..g,
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time=="T3"),], 
+             aes(x=plant.mass..g, y=sg_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30000000)) +
+  ggtitle("Day-59") +
+  ylab("SG sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+### Time 4
+######## T4 model
+m1.SG.T4<-gam(sg_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time=="T4", data = fcm.df, method = "REML")
+
+m2.SG.T4<-gam(sg_sum ~  Treatment + s(plant.mass..g), subset = Time=="T4", data = fcm.df, method = "REML")
+
+m3.SG.T4<-gam(sg_sum ~  s(plant.mass..g), subset = Time=="T4", data = fcm.df, method = "REML")
+
+T4.SG.AIC<-AIC(m1.SG.T4, m2.SG.T4, m3.SG.T4)
+# best is smoother solo
+
+summary(m1.SG.T4)
+anova.gam(m1.SG.T4)
+gam.check(m1.SG.T4, rep=1000)
+draw(m1.SG.T4)
+concrvity(m1.SG.T4)
+par(mfrow = c(2, 2))
+plot(m1.SG.T4, all.terms = TRUE, page=1)
+
+# model predictions
+SG.diff.T4<-plot_difference(
+  m1.SG.T4,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+SG.T4.mod.plot<-
+  plot_smooths(
+  model = m1.SG.T4,
+  series = plant.mass..g,
+  comparison = Treatment
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time=="T4"),], 
+             aes(x=plant.mass..g, y=sg_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30000000)) +
+  ggtitle("Day-89") +
+  ylab("SG sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+Compile the figures
+```{r fcm comp figs}
+extract.legend <- get_legend(
+  # create some space to the left of the legend
+  SG.T4.mod.plot + theme(legend.box.margin = margin(0, 0, 0, 10)))
+
+
+FCM.alltimes<-plot_grid(
+  AF.T1.mod.plot+ theme(legend.position = "none"),
+  AF.T3.mod.plot+ theme(legend.position = "none"),
+  AF.T4.mod.plot+ theme(legend.position = "none"), extract.legend,
+  SG.T1.mod.plot+ theme(legend.position = "none"),
+  SG.T3.mod.plot+ theme(legend.position = "none"),
+  SG.T4.mod.plot+ theme(legend.position = "none"), extract.legend,
+  rel_widths = c(8,8,8,3, 8,8,8,3), ncol=4)
+ggsave("figures/FCM.alltimes.mod.pdf", height=6, width=9)
+
+FCM.alltimes
+
+
+
+#### model fits
+FCM.mod.dif<-plot_grid(
+  AF.diff.T1+ theme(legend.position = "none")+ ggtitle("AF Day-10"),
+  AF.diff.T3+ theme(legend.position = "none")+ ggtitle("AF-Day-59"),
+  AF.diff.T4+ theme(legend.position = "none")+ ggtitle("AF-Day-89"),
+  SG.diff.T1+ theme(legend.position = "none")+ ggtitle("SG Day-10"),
+  SG.diff.T3+ theme(legend.position = "none")+ ggtitle("SG-Day-59"),
+  SG.diff.T4+ theme(legend.position = "none")+ ggtitle("SG-Day-89"),
+  rel_widths = c(8,8,8,8,8,8), ncol=3)
+ggsave("figures/FCM.mod.diff.pdf", height=6, width=9)
+
+FCM.alltimes
+```
+
 
 ### Zooplankton
 integrating the zooplankton counting data and code from Jon into the markdown.
