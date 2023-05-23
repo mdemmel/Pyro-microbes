@@ -435,9 +435,8 @@ z<-summaryBy(Density ~ Tank + Date.collected + Time.point + Treatment + plant.ma
                spp, data = z.df, FUN = mean)
 ```
 
-
-```{r, Daphnia}
-# Daphnia
+```{r zoop model plots}
+######### Daphnia
 
 zoop.all<-pivot_wider(z, names_from="spp", values_from="Density.mean")
 zoop.all[is.na(zoop.all)]<-0
@@ -448,10 +447,8 @@ zoop.all<-as.data.frame(zoop.all)
 cols2<-c("Time.point", "Tank", "Date.collected", "Treatment")
 zoop.all[cols2] <- lapply(zoop.all[cols2], factor) # make all these factors
 
+######### 
 
-```
-
-```{r zoop model plots}
 
 ######## T0 model
 m1.daph.T0<-gam(all_daphnia~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T0", data = zoop.all, method = "REML")
@@ -590,6 +587,10 @@ Daph.diff.T3<-plot_difference(
   difference = list(Treatment = c("burned", "unburned"))
 )
 
+Daph.T3.diff.plot<-plot_grid(Daph.diff.T3 + ggtitle("Daphnia, Day-59"))
+ggsave("figures/Daph.diff.T3.pdf", height=4, width=4)
+
+
 ###########  
 #plot for the model output on rawdata
 daph.T3.mod.plot<-
@@ -647,26 +648,7 @@ daph.T4.mod.plot<-
 
 ```
 
-```{r}
-# compile figs
-
-# use 'extract.legend'
-
-Daph.plots<-plot_grid(
-  daph.T0.mod.plot+ theme(legend.position = "none"),
-  daph.T1.mod.plot+ theme(legend.position = "none"),
-  daph.T2.mod.plot+ theme(legend.position = "none"),
-  daph.T3.mod.plot+ theme(legend.position = "none"),
-  daph.T4.mod.plot+ theme(legend.position = "none"),
-  extract.legend,
-  rel_widths = c(8,8,8,8,8,3), ncol=6)
-ggsave("figures/Daph.alltimes.mod.pdf", height=6, width=15)
-
-Daph.plots
-```
-
-
-```{r, Daphnia}
+```{r old daph plots, eval=FALSE}
 ## Plot
 p1<-ggplot(z1,aes(y=all_daphnia, x=Plant.mass..g, color = factor(Treatment))) +
   geom_point(size=2)+
@@ -702,35 +684,243 @@ summary(M1)
   # No effect of plant mass on Daphnia abundance p=0.13
 ```
 
+```{r mosquito model plots}
 
-```{r, Mosquito}
-#Mosquito
-p2<-ggplot(z1,aes(y=mosquito, x=Plant.mass..g, color = factor(Treatment))) +
-  geom_point(size=2)+
-  facet_grid(rows=vars(Date.collected), scales="free_y")+
-  labs(x = "G plants added",y="Density (#/L)", title = "Mosquitoes")+
-  geom_smooth(method = loess)
-p2
+######## T1 model
+m1.mos.T1<-gam(mosquito~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = zoop.all, method = "REML")
 
-timepoint<-"T4"
-M3 <- gam(mosquito ~ s(Plant.mass..g, k=5, bs="tp") +
-            s(Plant.mass..g, Treatment, k=12, bs="re"), data=subset(z1, Time.point %in% timepoint), method="REML", family="gaussian")
-M4 <- gam(mosquito ~ s(Plant.mass..g, k=5, bs="tp"), data=subset(z1, Time.point %in% timepoint), method="REML", family="gaussian")
+m2.mos.T1<-gam(mosquito ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
 
-AIC(M3,M4) 
-summary(M3) 
-summary(M4) 
+m3.mos.T1<-gam(mosquito ~  s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
 
-# T0
-  # No mosquitos
-# T1
-  #SIGNIFICANT difference between mosquito abundance along burned/unburned gradients plantmass*treatment, p=0.0004
-# T2
-  #SIGNIFICANT difference between mosquito abundance along burned/unburned gradients plantmass*treatment, p=0.004
-# T3
-  # SIGNIFICANT difference between mosquito abundance along burned/unburned gradients plantmass*treatment, p=0.008
-# T4
-  # SIGNIFICANT difference between mosquito abundance along burned/unburned gradients plantmass*treatment, p=0.01
+T1.mos.AIC<-AIC(m1.mos.T1, m2.mos.T1, m3.mos.T1)
+# best is smoother solo
+
+summary(m1.mos.T1)
+anova.gam(m1.mos.T1)
+gam.check(m1.mos.T1, rep=1000)
+draw(m1.mos.T1)
+concrvity(m1.mos.T1)
+par(mfrow = c(2, 2))
+plot(m1.mos.T1, all.terms = TRUE, page=1)
+
+
+# model predictions
+mos.diff.T1<-plot_difference(
+  m1.mos.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+mos.T1.mod.plot<-
+  plot_smooths(
+  model = m1.mos.T1,
+  series = plant.mass..g,
+  comparison=Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=mosquito, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  ggtitle("Day-10") +
+  ylab("Mosquito density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T2 model
+m1.mos.T2<-gam(mosquito~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m2.mos.T2<-gam(mosquito ~  Treatment + s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m3.mos.T2<-gam(mosquito ~  s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+T2.mos.AIC<-AIC(m1.mos.T2, m2.mos.T2, m3.mos.T2)
+# best is smoother solo
+
+summary(m1.mos.T2)
+anova.gam(m1.mos.T2)
+gam.check(m1.mos.T2, rep=1000)
+draw(m1.mos.T2)
+concrvity(m1.mos.T2)
+par(mfrow = c(2, 2))
+plot(m1.mos.T2, all.terms = TRUE, page=1)
+
+# model predictions
+mos.diff.T2<-plot_difference(
+  m1.mos.T2,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+mos.T2.mod.plot<-
+  plot_smooths(
+  model = m1.mos.T2,
+  series = plant.mass..g,
+  comparison= Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=mosquito, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  ggtitle("Day-31") +
+  ylab("Mosquito density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T3 model
+m1.mos.T3<-gam(mosquito~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m2.mos.T3<-gam(mosquito ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m3.mos.T3<-gam(mosquito ~  s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+T3.mos.AIC<-AIC(m1.mos.T3, m2.mos.T3, m3.mos.T3)
+# best is smoother solo
+
+summary(m1.mos.T3)
+anova.gam(m1.mos.T3)
+gam.check(m1.mos.T3, rep=1000)
+draw(m1.mos.T3)
+concrvity(m1.mos.T3)
+par(mfrow = c(2, 2))
+plot(m1.mos.T3, all.terms = TRUE, page=1)
+
+
+# model predictions
+mos.diff.T3<-plot_difference(
+  m1.mos.T3,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+mos.T3.mod.plot<-
+  plot_smooths(
+  model = m1.mos.T3,
+  series = plant.mass..g,
+  comparison=Treatment,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=mosquito, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  ggtitle("Day-59") +
+  ylab("Mosquito density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############################
+######## T4 model
+m1.mos.T4<-gam(mosquito~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m2.mos.T4<-gam(mosquito ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m3.mos.T4<-gam(mosquito ~  s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+T4.mos.AIC<-AIC(m1.mos.T4, m2.mos.T4, m3.mos.T4)
+# best is smoother solo
+
+summary(m1.mos.T4)
+anova.gam(m1.mos.T4)
+gam.check(m1.mos.T4, rep=1000)
+draw(m1.mos.T4)
+concrvity(m1.mos.T4)
+par(mfrow = c(2, 2))
+plot(m1.mos.T4, all.terms = TRUE, page=1)
+
+
+# model predictions
+mos.diff.T4<-plot_difference(
+  m1.mos.T4,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+
+###########  
+#plot for the model output on rawdata
+mos.T4.mod.plot<-
+  plot_smooths(
+  model = m1.mos.T4,
+  series = plant.mass..g,
+  comparison= Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=mosquito, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  ggtitle("Day-89") +
+  ylab("Mosquito density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+######### Mosquito model plots
+Mos.plot.dids<-plot_grid(
+ mos.diff.T1 + theme(legend.position = "Mosquito Day-10"),
+ mos.diff.T2 + theme(legend.position = "Day-31"),
+ mos.diff.T3 + theme(legend.position = "Day-59"), 
+ mos.diff.T4 + theme(legend.position = "Day-89"),
+ rel_widths = c(8,8,8,8), ncol=4)
+ggsave("figures/Mos.mod.diff.pdf", height=3, width=11)
+  
+```
+
+```{r compile Daph and mosq}
+# compile figs
+
+### just daphnia
+Daph.plots<-plot_grid(
+  daph.T1.mod.plot+ theme(legend.position = "none"),
+  daph.T2.mod.plot+ theme(legend.position = "none"),
+  daph.T3.mod.plot+ theme(legend.position = "none"),
+  daph.T4.mod.plot+ theme(legend.position = "none"),
+  extract.legend,
+  rel_widths = c(8,8,8,8,3), ncol=5, 
+  labels=c('A', 'B', 'C', 'D', ''), label_size=10)
+ggsave("figures/Daph.alltimes.mod.pdf", height=6, width=12)
+
+
+### just Mosquitos
+Mos.plots<-plot_grid(
+  mos.T1.mod.plot+ theme(legend.position = "none"),
+  mos.T2.mod.plot+ theme(legend.position = "none"),
+  mos.T3.mod.plot+ theme(legend.position = "none"),
+  mos.T4.mod.plot+ theme(legend.position = "none"),
+  extract.legend,
+  rel_widths = c(8,8,8,8, 3), ncol=5)
+ggsave("figures/Mos.alltimes.mod.pdf", height=6, width=12)
+
+
+### compile the Daph and Mosquitos
+Daph.Mos<-plot_grid(
+  daph.T1.mod.plot+ theme(legend.position = "none"),
+  daph.T2.mod.plot+ theme(legend.position = "none"),
+  daph.T3.mod.plot+ theme(legend.position = "none"),
+  daph.T4.mod.plot+ theme(legend.position = "none"), extract.legend,
+  
+  mos.T1.mod.plot+ theme(legend.position = "none"),
+  mos.T2.mod.plot+ theme(legend.position = "none"),
+  mos.T3.mod.plot+ theme(legend.position = "none"),
+  mos.T4.mod.plot+ theme(legend.position = "none"), extract.legend,
+  
+  rel_widths = c(8,8,8,8,3, 8,8,8,8,3), ncol=5, 
+  labels=c('A', '', '', '', '',
+           'B', '', '', '', ''), label_size=10)
+ggsave("figures/Daph.Mos.alltimes.pdf", height=8, width=12)
+
 ```
 
 
