@@ -426,15 +426,16 @@ zoop<- zoop %>% select(Time.point, Date.collected, Treatment, plant.mass..g, Tan
 
 write.csv(zoop, "output/Pyro_zoop_cleaned.csv")
 #############################################
-```
 
+# make summary dataframe
 
-```{r, zooplankton summary}
 z.df<-zoop
 z<-summaryBy(Density ~ Tank + Date.collected + Time.point + Treatment + plant.mass..g +
                spp, data = z.df, FUN = mean)
 ```
 
+### Daphnia density  
+* models for T0 (not vital) and the 4 sampling points: T1-T4  
 ```{r zoop model plots}
 ######### Daphnia
 
@@ -648,42 +649,8 @@ daph.T4.mod.plot<-
 
 ```
 
-```{r old daph plots, eval=FALSE}
-## Plot
-p1<-ggplot(z1,aes(y=all_daphnia, x=Plant.mass..g, color = factor(Treatment))) +
-  geom_point(size=2)+
-  facet_grid(rows=vars(Date.collected), scales="free_y")+
-  labs(x = "G plants added", y="Density (#/L)", title = "Daphnia")+
-   geom_smooth(method = loess)
-p1
-z1$Plant.mass..g<-as.numeric(z1$Plant.mass..g)
-z1$Treatment<-as.factor(z1$Treatment)
-
-timepoint<-"T2"
-M1 <- gam(all_daphnia ~ s(Plant.mass..g, k=5, bs="tp") +
-          s(Plant.mass..g, Treatment, k=5, bs="re"), data=subset(z1, Time.point %in% timepoint), method="REML", family="gaussian")
-M2 <- gam(all_daphnia ~ s(Plant.mass..g, k=5, bs="tp"), data=subset(z1, Time.point %in% timepoint), method="REML", family="gaussian")
-
-AIC(M1,M2)
-summary(M2)
-summary(M1)
-
-# T0
-  # No difference between Daphnia abundance along burned/unburned gradients
-  # No effect of plant mass on Daphnia abundance p=0.83
-# T1
-  #No difference between Daphnia abundance along burned/unburned gradients
-  # No effect of plant mass on Daphnia abundance p=0.06
-# T2
-  # No difference between Daphnia abundance along burned/unburned gradients
-  # SIGNIFICANT effect of plant mass on Daphnia abundance p=0.04
-# T3
-  # SIGNIFICANT difference between Daphnia abundance along burned/unburned gradients plantmass*treatment, p=0.009
-# T4
-  # No difference between Daphnia abundance along burned/unburned gradients
-  # No effect of plant mass on Daphnia abundance p=0.13
-```
-
+### Mosquito density  
+* models the 4 sampling points: T1-T4  
 ```{r mosquito model plots}
 
 ######## T1 model
@@ -866,19 +833,574 @@ mos.T4.mod.plot<-
   xlab("plant material (g)") +
   Fig.formatting
 
-
-######### Mosquito model plots
-Mos.plot.dids<-plot_grid(
- mos.diff.T1 + theme(legend.position = "Mosquito Day-10"),
- mos.diff.T2 + theme(legend.position = "Day-31"),
- mos.diff.T3 + theme(legend.position = "Day-59"), 
- mos.diff.T4 + theme(legend.position = "Day-89"),
- rel_widths = c(8,8,8,8), ncol=4)
-ggsave("figures/Mos.mod.diff.pdf", height=3, width=11)
-  
 ```
 
-```{r compile Daph and mosq}
+### Calanoid density
+```{r, Calanoid}
+# Calanoid
+
+######## T1 model
+m1.calan.T1<-gam(calanoid~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m2.calan.T1<-gam(calanoid ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m3.calan.T1<-gam(calanoid ~  s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+T1.calan.AIC<-AIC(m1.calan.T1, m2.calan.T1, m3.calan.T1)
+# best is smoother solo
+
+summary(m1.calan.T1)
+anova.gam(m1.calan.T1)
+gam.check(m1.calan.T1, rep=1000)
+draw(m1.calan.T1)
+concrvity(m1.calan.T1)
+par(mfrow = c(2, 2))
+plot(m1.calan.T1, all.terms = TRUE, page=1)
+
+
+# model predictions
+calan.diff.T1<-plot_difference(
+  m1.calan.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+calan.T1.mod.plot<-
+  plot_smooths(
+  model = m1.calan.T1,
+  series = plant.mass..g,
+  comparison=Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=calanoid, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 8)) +
+  ggtitle("Day-10") +
+  ylab("calanoid density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T2 model
+m1.calan.T2<-gam(calanoid~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m2.calan.T2<-gam(calanoid ~  Treatment + s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m3.calan.T2<-gam(calanoid ~  s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+T2.calan.AIC<-AIC(m1.calan.T2, m2.calan.T2, m3.calan.T2)
+# best is smoother solo
+
+summary(m3.calan.T2)
+anova.gam(m3.calan.T2)
+gam.check(m3.calan.T2, rep=1000)
+draw(m3.calan.T2)
+concrvity(m3.calan.T2)
+par(mfrow = c(2, 2))
+plot(m3.calan.T2, all.terms = TRUE, page=1)
+
+# model predictions
+calan.diff.T2<-plot_difference(
+  m3.calan.T2,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+calan.T2.mod.plot<-
+  plot_smooths(
+  model = m3.calan.T2,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=calanoid, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 8)) +
+  ggtitle("Day-31") +
+  ylab("calanoid density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T3 model
+m1.calan.T3<-gam(calanoid~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m2.calan.T3<-gam(calanoid ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m3.calan.T3<-gam(calanoid ~  s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+T3.calan.AIC<-AIC(m1.calan.T3, m2.calan.T3, m3.calan.T3)
+# best is smoother solo
+
+summary(m1.calan.T3)
+anova.gam(m1.calan.T3)
+gam.check(m1.calan.T3, rep=1000)
+draw(m1.calan.T3)
+concrvity(m1.calan.T3)
+par(mfrow = c(2, 2))
+plot(m1.calan.T3, all.terms = TRUE, page=1)
+
+
+# model predictions
+calan.diff.T3<-plot_difference(
+  m1.calan.T3,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+calan.T3.mod.plot<-
+  plot_smooths(
+  model = m1.calan.T3,
+  series = plant.mass..g,
+  comparison=Treatment,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=calanoid, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 8)) +
+  ggtitle("Day-59") +
+  ylab("calanoid density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############################
+######## T4 model
+m1.calan.T4<-gam(calanoid~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m2.calan.T4<-gam(calanoid ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m3.calan.T4<-gam(calanoid ~  s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+T4.calan.AIC<-AIC(m1.calan.T4, m2.calan.T4, m3.calan.T4)
+# best is smoother solo
+
+summary(m2.calan.T4)
+anova.gam(m2.calan.T4)
+gam.check(m2.calan.T4, rep=1000)
+draw(m2.calan.T4)
+concrvity(m2.calan.T4)
+par(mfrow = c(2, 2))
+plot(m2.calan.T4, all.terms = TRUE, page=1)
+
+
+# model predictions
+calan.diff.T4<-plot_difference(
+  m2.calan.T4,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+
+###########  
+#plot for the model output on rawdata
+calan.T4.mod.plot<-
+  plot_smooths(
+  model = m2.calan.T4,
+  series = plant.mass..g,
+  comparison= Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=calanoid, color=Treatment)) +
+  geom_line(aes(fill=Treatment, linetype=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 8)) +
+  ggtitle("Day-89") +
+  ylab("calanoid density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+### Cyclopoid density
+```{r, Cyclopoid}
+# cyclopoid
+
+######## T1 model
+m1.cyclo.T1<-gam(cyclopoid~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m2.cyclo.T1<-gam(cyclopoid ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m3.cyclo.T1<-gam(cyclopoid ~  s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+T1.cyclo.AIC<-AIC(m1.cyclo.T1, m2.cyclo.T1, m3.cyclo.T1)
+# best is smoother solo
+
+summary(m1.cyclo.T1)
+anova.gam(m1.cyclo.T1)
+gam.check(m1.cyclo.T1, rep=1000)
+draw(m1.cyclo.T1)
+concrvity(m1.cyclo.T1)
+par(mfrow = c(2, 2))
+plot(m1.cyclo.T1, all.terms = TRUE, page=1)
+
+
+# model predictions
+cyclo.diff.T1<-plot_difference(
+  m1.cyclo.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+cyclo.T1.mod.plot<-
+  plot_smooths(
+  model = m1.cyclo.T1,
+  series = plant.mass..g,
+  comparison=Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=cyclopoid, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 15)) +
+  ggtitle("Day-10") +
+  ylab("cyclopoid density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T2 model
+m1.cyclo.T2<-gam(cyclopoid~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m2.cyclo.T2<-gam(cyclopoid ~  Treatment + s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m3.cyclo.T2<-gam(cyclopoid ~  s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+T2.cyclo.AIC<-AIC(m1.cyclo.T2, m2.cyclo.T2, m3.cyclo.T2)
+# best is smoother solo
+
+summary(m3.cyclo.T2)
+anova.gam(m3.cyclo.T2)
+gam.check(m3.cyclo.T2, rep=1000)
+draw(m3.cyclo.T2)
+concrvity(m3.cyclo.T2)
+par(mfrow = c(2, 2))
+plot(m3.cyclo.T2, all.terms = TRUE, page=1)
+
+
+
+###########  
+#plot for the model output on rawdata
+cyclo.T2.mod.plot<-
+  plot_smooths(
+  model = m3.cyclo.T2,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=cyclopoid, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 8)) +
+  ggtitle("Day-31") +
+  ylab("cyclopoid density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T3 model
+m1.cyclo.T3<-gam(cyclopoid~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m2.cyclo.T3<-gam(cyclopoid ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m3.cyclo.T3<-gam(cyclopoid ~  s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+T3.cyclo.AIC<-AIC(m1.cyclo.T3, m2.cyclo.T3, m3.cyclo.T3)
+# best is smoother solo
+
+summary(m3.cyclo.T3)
+anova.gam(m3.cyclo.T3)
+gam.check(m3.cyclo.T3, rep=1000)
+draw(m3.cyclo.T3)
+concrvity(m3.cyclo.T3)
+par(mfrow = c(2, 2))
+plot(m3.cyclo.T3, all.terms = TRUE, page=1)
+
+
+###########  
+#plot for the model output on rawdata
+cyclo.T3.mod.plot<-
+  plot_smooths(
+  model = m3.cyclo.T3,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=cyclopoid, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 8)) +
+  ggtitle("Day-59") +
+  ylab("cyclopoid density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############################
+######## T4 model
+m1.cyclo.T4<-gam(cyclopoid~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m2.cyclo.T4<-gam(cyclopoid ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m3.cyclo.T4<-gam(cyclopoid ~  s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+T4.cyclo.AIC<-AIC(m1.cyclo.T4, m2.cyclo.T4, m3.cyclo.T4)
+# best is smoother solo
+
+summary(m3.cyclo.T4)
+anova.gam(m3.cyclo.T4)
+gam.check(m3.cyclo.T4, rep=1000)
+draw(m3.cyclo.T4)
+concrvity(m3.cyclo.T4)
+par(mfrow = c(2, 2))
+plot(m3.cyclo.T4, all.terms = TRUE, page=1)
+
+
+###########  
+#plot for the model output on rawdata
+cyclo.T4.mod.plot<-
+  plot_smooths(
+  model = m3.cyclo.T4,
+  series = plant.mass..g
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=cyclopoid, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 8)) +
+  ggtitle("Day-89") +
+  ylab("cyclopoid density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+### Kellicottia density
+```{r, Kellicottia}
+# cyclopoid
+
+######## T1 model
+m1.kelli.T1<-gam(kellicottia~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m2.kelli.T1<-gam(kellicottia ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m3.kelli.T1<-gam(kellicottia ~  s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+T1.kelli.AIC<-AIC(m1.kelli.T1, m2.kelli.T1, m3.kelli.T1)
+# best is smoother solo
+
+summary(m1.kelli.T1)
+anova.gam(m1.kelli.T1)
+gam.check(m1.kelli.T1, rep=1000)
+draw(m1.kelli.T1)
+concrvity(m1.kelli.T1)
+par(mfrow = c(2, 2))
+plot(m1.kelli.T1, all.terms = TRUE, page=1)
+
+
+# model predictions
+kelli.diff.T1<-plot_difference(
+  m1.kelli.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+kelli.T1.mod.plot<-
+  plot_smooths(
+  model = m1.kelli.T1,
+  series = plant.mass..g,
+  comparison=Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=kellicottia, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 5)) +
+  ggtitle("Day-10") +
+  ylab("kellicottia density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+#### not enough observations in other time points
+```
+
+### Nauplii density
+```{r, Nauplii}
+# Nauplii
+
+######## T1 model
+m1.naup.T1<-gam(nauplii~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m2.naup.T1<-gam(nauplii ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m3.naup.T1<-gam(nauplii ~  s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+T1.naup.AIC<-AIC(m1.naup.T1, m2.naup.T1, m3.naup.T1)
+# best is smoother solo
+
+summary(m1.naup.T1)
+anova.gam(m1.naup.T1)
+gam.check(m1.naup.T1, rep=1000)
+draw(m1.naup.T1)
+concrvity(m1.naup.T1)
+par(mfrow = c(2, 2))
+plot(m1.naup.T1, all.terms = TRUE, page=1)
+
+
+# model predictions
+naup.diff.T1<-plot_difference(
+  m1.naup.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+naup.T1.mod.plot<-
+  plot_smooths(
+  model = m1.naup.T1,
+  series = plant.mass..g,
+  comparison=Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=nauplii, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 20)) +
+  ggtitle("Day-10") +
+  ylab("nauplii density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T2 model
+m1.naup.T2<-gam(nauplii~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m2.naup.T2<-gam(nauplii ~  Treatment + s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m3.naup.T2<-gam(nauplii ~  s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+T2.naup.AIC<-AIC(m1.naup.T2, m2.naup.T2, m3.naup.T2)
+# best is smoother solo
+
+summary(m1.naup.T2)
+anova.gam(m1.naup.T2)
+gam.check(m1.naup.T2, rep=1000)
+draw(m1.naup.T2)
+concrvity(m1.naup.T2)
+par(mfrow = c(2, 2))
+plot(m1.naup.T2, all.terms = TRUE, page=1)
+
+
+
+###########  
+#plot for the model output on rawdata
+naup.T2.mod.plot<-
+  plot_smooths(
+  model = m1.naup.T2,
+  series = plant.mass..g,
+  comparison=Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=nauplii, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 20)) +
+  ggtitle("Day-31") +
+  ylab("nauplii density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T3 model
+m1.naup.T3<-gam(nauplii~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m2.naup.T3<-gam(nauplii ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m3.naup.T3<-gam(nauplii ~  s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+T3.naup.AIC<-AIC(m1.naup.T3, m2.naup.T3, m3.naup.T3)
+# best is smoother solo
+
+summary(m3.naup.T3)
+anova.gam(m3.naup.T3)
+gam.check(m3.naup.T3, rep=1000)
+draw(m3.naup.T3)
+concrvity(m3.naup.T3)
+par(mfrow = c(2, 2))
+plot(m3.naup.T3, all.terms = TRUE, page=1)
+
+
+###########  
+#plot for the model output on rawdata
+naup.T3.mod.plot<-
+  plot_smooths(
+  model = m3.naup.T3,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=nauplii, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 20)) +
+  ggtitle("Day-59") +
+  ylab("nauplii density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############################
+######## T4 model
+m1.naup.T4<-gam(nauplii~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m2.naup.T4<-gam(nauplii ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m3.naup.T4<-gam(nauplii ~  s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+T4.naup.AIC<-AIC(m1.naup.T4, m2.naup.T4, m3.naup.T4)
+# best is smoother solo
+
+summary(m3.naup.T4)
+anova.gam(m3.naup.T4)
+gam.check(m3.naup.T4, rep=1000)
+draw(m3.naup.T4)
+concrvity(m3.naup.T4)
+par(mfrow = c(2, 2))
+plot(m3.naup.T4, all.terms = TRUE, page=1)
+
+
+###########  
+#plot for the model output on rawdata
+naup.T4.mod.plot<-
+  plot_smooths(
+  model = m3.naup.T4,
+  series = plant.mass..g
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=nauplii, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 20)) +
+  ggtitle("Day-89") +
+  ylab("nauplii density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+### Compiled and single species density plots 
+* models for T0 (not vital) and the 4 sampling points: T1-T4  
+```{r compiled plots}
 # compile figs
 
 ### just daphnia
@@ -904,6 +1426,59 @@ Mos.plots<-plot_grid(
 ggsave("figures/Mos.alltimes.mod.pdf", height=6, width=12)
 
 
+### just Calanoids
+Cal.plots<-plot_grid(
+  calan.T1.mod.plot+ theme(legend.position = "none"),
+  calan.T2.mod.plot+ theme(legend.position = "none"),
+  calan.T3.mod.plot+ theme(legend.position = "none"),
+  calan.T4.mod.plot+ theme(legend.position = "none"),
+  extract.legend,
+  rel_widths = c(8,8,8,8, 3), ncol=5)
+ggsave("figures/Calanoid.alltimes.mod.pdf", height=6, width=12)
+
+
+### just Cyclopoids
+Cycl.plots<-plot_grid(
+  cyclo.T1.mod.plot+ theme(legend.position = "none"),
+  cyclo.T2.mod.plot+ theme(legend.position = "none"),
+  cyclo.T3.mod.plot+ theme(legend.position = "none"),
+  cyclo.T4.mod.plot+ theme(legend.position = "none"),
+  extract.legend,
+  rel_widths = c(8,8,8,8, 3), ncol=5)
+ggsave("figures/Cyclopoid.alltimes.mod.pdf", height=6, width=12)
+
+
+### just Nauplii
+Naupl.plots<-plot_grid(
+  naup.T1.mod.plot+ theme(legend.position = "none"),
+  naup.T2.mod.plot+ theme(legend.position = "none"),
+  naup.T3.mod.plot+ theme(legend.position = "none"),
+  naup.T4.mod.plot+ theme(legend.position = "none"),
+  extract.legend,
+  rel_widths = c(8,8,8,8, 3), ncol=5)
+ggsave("figures/Naupl.alltimes.mod.pdf", height=6, width=12)
+
+
+### just Kellicottia
+Kellic.plots<-plot_grid(
+  kelli.T1.mod.plot, ncol=1)
+ggsave("figures/Kellicottia.alltimes.mod.pdf", height=6, width=12)
+
+
+
+
+#################################### Model plots for mosquitos
+######### Mosquito model plots
+Mos.plot.dids<-plot_grid(
+ mos.diff.T1 + theme(legend.position = "Mosquito Day-10"),
+ mos.diff.T2 + theme(legend.position = "Day-31"),
+ mos.diff.T3 + theme(legend.position = "Day-59"), 
+ mos.diff.T4 + theme(legend.position = "Day-89"),
+ rel_widths = c(8,8,8,8), ncol=4)
+ggsave("figures/Mos.mod.diff.pdf", height=3, width=11)
+  
+
+#################################### Compiled
 ### compile the Daph and Mosquitos
 Daph.Mos<-plot_grid(
   daph.T1.mod.plot+ theme(legend.position = "none"),
@@ -920,82 +1495,11 @@ Daph.Mos<-plot_grid(
   labels=c('A', '', '', '', '',
            'B', '', '', '', ''), label_size=10)
 ggsave("figures/Daph.Mos.alltimes.pdf", height=8, width=12)
-
 ```
 
-
-```{r, Calanoid}
-#Calanoid
-p3<-ggplot(z1,aes(y=calanoid, x=Plant.mass..g, color = factor(Treatment))) +
-  geom_point(size=2, aes(colour=factor(Treatment)))+
-  facet_grid(rows=vars(Date.collected), scales="free_y")+
-  labs(x = "G plants added",y="Density (#/L)", title = "calanoid")+
-  geom_smooth(method = loess)
-p3
-
-
-timepoint<-"T4"
-M5 <- gam(calanoid ~ s(Plant.mass..g, k=5, bs="tp") +
-            s(Plant.mass..g, Treatment, k=5, bs="re"), data=subset(z1, Time.point %in% timepoint), method="REML", family="gaussian")
-M6 <- gam(calanoid ~ s(Plant.mass..g, k=5, bs="tp"), data=subset(z1, Time.point %in% timepoint), method="REML", family="gaussian")
-
-AIC(M5,M6) 
-summary(M5) 
-summary(M6)
-```
-
-
-```{r, Cyclopoid}
-#Cyclopoid
-p4<-ggplot(z1,aes(y=cyclopoid, x=Plant.mass..g, color = factor(Treatment))) +
-  geom_point(size=2, aes(colour=factor(Treatment)))+
-  facet_grid(rows=vars(Date.collected), scales="free_y")+
-  labs(x = "G plants added",y="Density (#/L)", title = "cyclopoid")+
-  geom_smooth(method = loess)
-p4
-
-timepoint<-"T3"
-M7 <- gam(cyclopoid ~ s(Plant.mass..g, k=5, bs="tp") +
-            s(Plant.mass..g, Treatment, k=5, bs="re"), data=subset(z1, Time.point %in% timepoint), method="REML", family="gaussian")
-M8 <- gam(cyclopoid ~ s(Plant.mass..g, k=5, bs="tp"), data=subset(z1, Time.point %in% timepoint), method="REML", family="gaussian")
-
-AIC(M7,M8) 
-summary(M7) 
-summary(M8)
-```
-
-
-```{r, Kellicottia}
-#Kellicottia
-p5<-ggplot(z1,aes(y=kellicottia, x=Plant.mass..g, color = factor(Treatment))) +
-  geom_point(size=2)+
-  facet_grid(rows=vars(Date.collected), scales="free_y")+
-  labs(x = "G plants added",y="Density (#/L)", title = "kellicottia")+
-  geom_smooth(method = loess)
-p5
-```
-
-
-```{r, Nauplii}
-#Nauplii
-p6<-ggplot(z1,aes(y=nauplii, x=Plant.mass..g, color = factor(Treatment))) +
-  geom_point(size=2)+
-  facet_grid(rows=vars(Date.collected), scales="free_y")+
-  labs(x = "G plants added",y="Density (#/L)", title = "nauplii")+
-  geom_smooth(method = loess)
-p6
-
-p6<-ggplot(z1,aes(y=chironomid, x=Plant.mass..g, color = factor(Treatment))) +
-  geom_point(size=2)+
-  facet_grid(rows=vars(Date.collected), scales="free_y")+
-  labs(x = "G plants added",y="Density (#/L)", title = "chironomid")+
-  geom_smooth(method = loess)
-p6
-
-```
-
-
-```{r}
+### Density stacked bar plot
+* abundance summing to 1.0
+```{r, density stacked bar abundance}
 z2<-summaryBy(Density.mean ~ spp, data = z, FUN = c(mean, max, min))
 
 z3<-subset(z, spp=="calanoid"|spp=="ceriodaphnia"|spp=="chironomid"|spp=="cyclopoid"|
@@ -1003,7 +1507,13 @@ z3<-subset(z, spp=="calanoid"|spp=="ceriodaphnia"|spp=="chironomid"|spp=="cyclop
              spp=="nauplii")
 levels(as.factor(z$spp))
 
-p7<-ggplot(z3,aes(fill=spp, y=Density.mean, x=Plant.mass..g)) +
+# set structure
+make.fac<-c("Time.point", "Treatment", "Tank", "spp")
+z3[make.fac] <- lapply(z3[make.fac], factor) # make all these factors
+z3$plant.mass..g<-as.numeric(z3$plant.mass..g)
+
+
+p7<-ggplot(z3,aes(fill=spp, y=Density.mean, x=plant.mass..g)) +
   geom_bar(stat="identity", position="fill", width = 12)+
   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
   facet_grid(rows=vars(Date.collected), cols=vars(Treatment))+
@@ -1011,23 +1521,27 @@ p7<-ggplot(z3,aes(fill=spp, y=Density.mean, x=Plant.mass..g)) +
 p7
 ```
 
-
+### Density stacked bar plot v2
+* stacked bar with density sum  
+* gam approach for density
 ```{r}
 # big stacked plot
-p8<-ggplot(z3,aes(fill=spp, y=Density.mean, x=Plant.mass..g)) +
+p8<-ggplot(z3,aes(fill=spp, y=Density.mean, x=plant.mass..g)) +
   geom_bar(stat="identity", width = 12)+
   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
   facet_grid(rows=vars(Date.collected), cols=vars(Treatment), scales="fixed")+
   labs(x = "Treatment")
 p8 #position="fill"
 
-z4<-pivot_wider(z3, names_from = spp, values_from = Density.mean)
-z4[is.na(z4)]<-0
-names(z4)
 ```
 
 
-```{r}
+```{r PCAs}
+
+z4<-pivot_wider(z3, names_from = spp, values_from = Density.mean)
+z4[is.na(z4)]<-0
+names(z4)
+
 PCA1 <- prcomp(subset(z4, Time.point %in% "T1")[,c(6:15)], center = TRUE)
 PCA2 <- prcomp(subset(z4, Time.point %in% "T2")[,c(6:15)], center = TRUE)
 PCA3 <- prcomp(subset(z4, Time.point %in% "T3")[,c(6:15)], center = TRUE)
@@ -1041,7 +1555,7 @@ scores1<-as.data.frame(PCA1$x[,c(1,2)])
 scores1<-cbind(scores1,as.data.frame(subset(z4, Time.point %in% "T1"))[,c(1,4,5)] )
 ecor1<-as.data.frame(PCA1$rotation[,c(1:2)])
 jj1<-summary(PCA1)
-scores1$mass.rank<-trunc(rank(scores1$Plant.mass..g))
+scores1$mass.rank<-trunc(rank(scores1$plant.mass..g))
 
 
 PCplot1<-ggplot() +
@@ -1055,7 +1569,7 @@ PCplot1<-ggplot() +
        y=paste("PC 2 (", format(100 *jj1$importance[2,2], digits=4), "%)", sep=""))
 PCplot1
 
-adonis(subset(z4, Time.point %in% "T1")[,c(6:15)]~scores1$Treatment*scores1$Plant.mass..g)
+adonis(subset(z4, Time.point %in% "T1")[,c(6:15)]~scores1$Treatment*scores1$plant.mass..g)
 ```
 
 
@@ -1065,7 +1579,7 @@ scores2<-as.data.frame(PCA2$x[,c(1,2)])
 scores2<-cbind(scores2,as.data.frame(subset(z4, Time.point %in% "T2"))[,c(1,4,5)] )
 ecor2<-as.data.frame(PCA2$rotation[,c(1:2)])
 jj2<-summary(PCA2)
-scores2$mass.rank<-trunc(rank(scores2$Plant.mass..g))
+scores2$mass.rank<-trunc(rank(scores2$plant.mass..g))
 
 PCplot2<-ggplot() +
   geom_point(data=scores2, aes(PC1, PC2, colour=Treatment, fill=Treatment, size=mass.rank), alpha=0.3) + 
@@ -1078,7 +1592,7 @@ PCplot2<-ggplot() +
        y=paste("PC 2 (", format(100 *jj2$importance[2,2], digits=4), "%)", sep=""))
 PCplot2
 
-adonis(subset(z4, Time.point %in% "T2")[,c(6:15)]~scores2$Treatment*scores2$Plant.mass..g)
+adonis(subset(z4, Time.point %in% "T2")[,c(6:15)]~scores2$Treatment*scores2$plant.mass..g)
 ```
 
 
@@ -1088,7 +1602,7 @@ scores3<-as.data.frame(PCA3$x[,c(1,2)])
 scores3<-cbind(scores3,as.data.frame(subset(z4, Time.point %in% "T3"))[,c(1,4,5)] )
 ecor3<-as.data.frame(PCA3$rotation[,c(1:2)])
 jj3<-summary(PCA3)
-scores3$mass.rank<-trunc(rank(scores3$Plant.mass..g))
+scores3$mass.rank<-trunc(rank(scores3$plant.mass..g))
 
 
 PCplot3<-ggplot() +
@@ -1102,7 +1616,7 @@ PCplot3<-ggplot() +
        y=paste("PC 2 (", format(100 *jj3$importance[2,2], digits=4), "%)", sep=""))
 PCplot3
 
-adonis(subset(z4, Time.point %in% "T3")[,c(6:15)]~scores3$Treatment*scores3$Plant.mass..g)
+adonis(subset(z4, Time.point %in% "T3")[,c(6:15)]~scores3$Treatment*scores3$plant.mass..g)
 ```
 
 
@@ -1112,7 +1626,7 @@ scores4<-as.data.frame(PCA4$x[,c(1,2)])
 scores4<-cbind(scores4,as.data.frame(subset(z4, Time.point %in% "T4"))[,c(1,4,5)] )
 ecor4<-as.data.frame(PCA4$rotation[,c(1:2)])
 jj4<-summary(PCA4)
-scores4$mass.rank<-trunc(rank(scores4$Plant.mass..g))
+scores4$mass.rank<-trunc(rank(scores4$plant.mass..g))
 
 
 PCplot4<-ggplot() +
@@ -1126,7 +1640,7 @@ PCplot4<-ggplot() +
        y=paste("PC 2 (", format(100 *jj3$importance[2,2], digits=4), "%)", sep=""))
 PCplot4
 
-adonis(subset(z4, Time.point %in% "T4")[,c(6:15)]~scores4$Treatment*scores4$Plant.mass..g)
+adonis(subset(z4, Time.point %in% "T4")[,c(6:15)]~scores4$Treatment*scores4$plant.mass..g)
 
 ```
 
@@ -1151,7 +1665,7 @@ scores1<-as.data.frame(PCA1$x[,c(1,2)])
 scores1<-cbind(scores1,as.data.frame(subset(z4, Time.point %in% "T1"))[,c(1,4,5)] )
 jj1<-summary(PCA1)
 ecor1<-as.data.frame(PCA1$rotation[,c(1:2)])
-scores1$mass.rank<-trunc(rank(scores1$Plant.mass..g))
+scores1$mass.rank<-trunc(rank(scores1$plant.mass..g))
 
 
 PCplot1<-ggplot() +
@@ -1166,9 +1680,9 @@ PCplot1<-ggplot() +
 PCplot1
 
 apply(zoop1, 1, function(x) !all(x==0)) # Need to remove rows of all 0s for the permanova
-adonis(zoop1[-5,]~scores1$Treatment[-5]*scores1$Plant.mass..g[-5])
+adonis(zoop1[-5,]~scores1$Treatment[-5]*scores1$plant.mass..g[-5])
 
-t1zoop<-dbrda(zoop1~scores1$Treatment*scores1$Plant.mass..g) 
+t1zoop<-dbrda(zoop1~scores1$Treatment*scores1$plant.mass..g) 
 anova(t1zoop)
 anova(t1zoop, by="terms", permu=800)
 
@@ -1184,7 +1698,7 @@ scores2<-as.data.frame(PCA2$x[,c(1,2)])
 scores2<-cbind(scores2,as.data.frame(subset(z4, Time.point %in% "T2"))[,c(1,4,5)] )
 ecor2<-as.data.frame(PCA2$rotation[,c(1:2)])
 jj2<-summary(PCA2)
-scores2$mass.rank<-trunc(rank(scores2$Plant.mass..g))
+scores2$mass.rank<-trunc(rank(scores2$plant.mass..g))
 
 PCplot2<-ggplot() +
   geom_point(data=scores2, aes(PC1, PC2, colour=Treatment, fill=Treatment, size=mass.rank), alpha=0.3) + 
@@ -1197,7 +1711,7 @@ PCplot2<-ggplot() +
        y=paste("PC 2 (", format(100 *jj2$importance[2,2], digits=4), "%)", sep=""))
 PCplot2
 
-t2zoop<-dbrda(zoop2~scores2$Treatment*scores2$Plant.mass..g) 
+t2zoop<-dbrda(zoop2~scores2$Treatment*scores2$plant.mass..g) 
 anova(t2zoop)
 anova(t2zoop, by="terms", permu=800)
 ```
@@ -1209,7 +1723,7 @@ scores3<-as.data.frame(PCA3$x[,c(1,2)])
 scores3<-cbind(scores3,as.data.frame(subset(z4, Time.point %in% "T3"))[,c(1,4,5)] )
 ecor3<-as.data.frame(PCA3$rotation[,c(1:2)])
 jj3<-summary(PCA3)
-scores3$mass.rank<-trunc(rank(scores3$Plant.mass..g))
+scores3$mass.rank<-trunc(rank(scores3$plant.mass..g))
 
 
 PCplot3<-ggplot() +
@@ -1223,7 +1737,7 @@ PCplot3<-ggplot() +
        y=paste("PC 2 (", format(100 *jj3$importance[2,2], digits=4), "%)", sep=""))
 PCplot3
 
-t3zoop<-dbrda(zoop3~scores3$Treatment*scores3$Plant.mass..g) 
+t3zoop<-dbrda(zoop3~scores3$Treatment*scores3$plant.mass..g) 
 anova(t3zoop)
 anova(t3zoop, by="terms", permu=800)
 
@@ -1236,7 +1750,7 @@ scores4<-as.data.frame(PCA4$x[,c(1,2)])
 scores4<-cbind(scores4,as.data.frame(subset(z4, Time.point %in% "T4"))[,c(1,4,5)] )
 ecor4<-as.data.frame(PCA4$rotation[,c(1:2)])
 jj4<-summary(PCA4)
-scores4$mass.rank<-trunc(rank(scores4$Plant.mass..g))
+scores4$mass.rank<-trunc(rank(scores4$plant.mass..g))
 
 
 PCplot4<-ggplot() +
@@ -1250,7 +1764,7 @@ PCplot4<-ggplot() +
        y=paste("PC 2 (", format(100 *jj3$importance[2,2], digits=4), "%)", sep=""))
 PCplot4
 
-t4zoop<-dbrda(zoop4~scores4$Treatment*scores4$Plant.mass..g) 
+t4zoop<-dbrda(zoop4~scores4$Treatment*scores4$plant.mass..g) 
 anova(t4zoop)
 anova(t4zoop, by="terms", permu=800)
 
