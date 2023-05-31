@@ -1,4 +1,4 @@
-﻿Sample.ID,time.point,tank,treatment,plant.mass..g,sample type,other.tube.ID,organism.or.type,well-plate,plate.ID,DNA..ng.ul,,,
+﻿Sample.ID,Time.point,tank,treatment,plant.mass..g,sample type,other.tube.ID,organism.or.type,well-plate,plate.ID,DNA..ng.ul,,,
 T1.1.water,T1,1,unburned,400,water,NA,water,A1,plate 1,0.76,,,
 T1.2.water,T1,2,burned,0,water,NA,water,A2,plate 1,2.25,,,
 T1.3.water,T1,3,unburned,300,water,NA,water,A3,plate 1,4.12,,,
