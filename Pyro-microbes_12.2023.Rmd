@@ -91,7 +91,7 @@ metadat.new$Sample.Treatment <- factor(metadat.new$Sample.Treatment,
                                        'mosquito-unburned'))
 
 env_dat <- read_excel("data/Pyro_YSI_data.xlsx")
-env_dat <- env_dat %>% select(Time.point, Tank, Temp, DO.percent, DO.mg.l, SPC, C, pH, DOC, TN, FI, BIX, HIX, raw_SUVA, Sr, SUVA_254)
+env_dat <- env_dat %>% dplyr::select(Time.point, Tank, Temp, DO.percent, DO.mg.l, SPC, C, pH, DOC, TN, FI, BIX, HIX, raw_SUVA, Sr, SUVA_254)
 
 metadat.new <- left_join(metadat.new, env_dat, by=c('time'='Time.point', 'tank'='Tank'))
 
@@ -179,7 +179,7 @@ ps_edge = prune_taxa(!(taxa_names(ps_edge) %in% chloro_only_edges), ps_edge)
 # FIGURE 2a (temporal trajectories)
 ```{r}
 ps_pyro_water <- prune_samples(sample_data(ps_asv_rare)$sample_type1 == 'water', ps_asv_rare)
-ord <- ordinate(ps_pyro_water, method = 'NMDS', distance = 'jaccard')
+ord <- ordinate(ps_pyro_water, method = 'NMDS', distance = 'bray')
 ord_df <- cbind(ord$points, sample_data(ps_pyro_water))
 
 ord_df$tank <- as.numeric(ord_df$tank)
@@ -350,6 +350,35 @@ ggarrange(water_pcoa, rel_abund, nrow = 1, labels = c('A', 'B'), widths = c(0.41
 dev.off()
 ```
 
+# Table 1
+```{r}
+aov.all <- adonis2(phyloseq::distance(ps_pyro_water, method='bray') ~ Treatment + plant_mass + time, 
+                   data=data.frame(sample_data(ps_pyro_water)))
+print_permanova(aov.all)
+```
+
+# Table S1
+```{r}
+# test different bins
+perm_results <- data.frame(df = numeric(), ss = numeric(), r2 = numeric(), f = numeric(), pval = numeric(), cutoff = numeric())
+vals <- sort(unique(sample_data(ps_pyro_water)$plant_mass))
+
+for(i in vals) {
+  sample_data(ps_pyro_water)$binning <- sample_data(ps_pyro_water)$plant_mass <= i
+  aov.all <- adonis2(phyloseq::distance(ps_pyro_water, method='bray') ~ binning, 
+                   data=data.frame(sample_data(ps_pyro_water)))
+  temp <- data.frame(aov.all)
+  temp$cutoff = i
+  perm_results <- rbind(perm_results, temp[1,])
+}
+View(perm_results)
+
+#write.table(perm_results, file = '~/Desktop/perm_results.csv', sep="\t", quote=F)
+
+```
+
+
+
 # Figure 3
 ```{r}
 library(ggpmisc)
@@ -427,8 +456,13 @@ lm_outs <- rbind(lm_outs, data.frame(time =time, comp='anova_pc1_vs_mds1', f.sta
   }
 } 
 }
-```
 
+ps_wat = ps_pyro_water
+
+# variable for table S2
+env_save = data.frame(MDS1=numeric(),MDS2=numeric(), env_variable=character(),  
+                      pval=numeric(), r2=numeric(), type=character(),var=character())
+```
 
 # Figure 3a
 ```{r}
@@ -454,6 +488,9 @@ envfit.scores$env_variable
 envfit.scores$var = c('Temp', '%DO',  'pH','DOC', 'FI', 'BIX', 'HIX','Sr', 'SUVA 254', 'genome size', "genomic plasticity", "bacterial growth rate")
 
 #envfit.scores %>% arrange(factor(env_variable, levels = c('DO.percent','DOC', 'FI', 'BIX', 'HIX', #'SUVA_254','Sr','Temp', 'pH', 'genome_size.mean', "phi.mean", "bacterial growth rate"))) %>% View()
+
+env_temp = envfit.scores; env_temp$var = factor(env_temp$var, levels=c('%DO', 'DOC', 'FI', 'BIX', 'HIX', 'SUVA 254', 'Sr','Temp','pH','genome size', "genomic plasticity", "bacterial growth rate"))
+env_save = rbind(env_save, env_temp %>% arrange(var))
 
 envfit.scores <- envfit.scores %>% filter(pval < 0.05)
 
@@ -489,7 +526,7 @@ t1 = ggplot(water_df.t1, aes(x = MDS1, y = MDS2)) +
 
 
 ## PC1 vs NMDS1
-envs = sample_data(ps_wat.t1)[,c(20, 24,25,26,27, 28, 29, 31, 32)]
+envs = sample_data(ps_wat.t1)[,c(19, 20, 24,25, 27, 28, 29, 31, 32)]
 colnames(sample_data(ps_wat.t1))
 scaled.dat <- scale(envs)
 
@@ -500,6 +537,11 @@ envsum = summary(env_rda)
 perc_exp = round(envsum$cont$importance[2,'PC1']* 100)
 
 water_df.t1$PC1 = Loadings.samp[,1]
+
+# scree plot
+barplot(envsum$cont$importance[2,],
+         xlab="PC Axis", ylab="% Variation Explained")
+scree = data.frame(perc = envsum$cont$importance[2,] + 0.14)
 
 # get model for loading vs PC1
 out <- comp_linear_segmented_model(water_df.t1, predictor='plant_mass', lm_outs, 'T1')
@@ -574,6 +616,9 @@ envfit.scores$var = c('Temp', '%DO',  'pH','DOC', 'FI', 'BIX', 'HIX','Sr', 'SUVA
 
 #envfit.scores %>% arrange(factor(env_variable, levels = c('DO.percent','DOC', 'FI', 'BIX', 'HIX', #'SUVA_254','Sr','Temp', 'pH', 'genome_size.mean', "phi.mean", "bacterial growth rate"))) %>% View()
 
+env_temp = envfit.scores; env_temp$var = factor(env_temp$var, levels=c('%DO', 'DOC', 'FI', 'BIX', 'HIX', 'SUVA 254', 'Sr','Temp','pH','genome size', "genomic plasticity", "bacterial growth rate"))
+env_save = rbind(env_save, env_temp %>% arrange(var))
+
 
 envfit.scores <- envfit.scores %>% filter(pval < 0.05)
 
@@ -609,7 +654,7 @@ t3 = ggplot(water_df.t3, aes(x = MDS1, y = MDS2)) +
 
 
 ## PC1 vs NMDS1
-envs = sample_data(ps_wat.t3)[,c(20, 24,25,26,27, 28, 29, 31, 32)]
+envs = sample_data(ps_wat.t3)[,c(19, 20, 24,25, 27, 28, 29, 31, 32)]
 
 scaled.dat <- scale(envs)
 
@@ -620,6 +665,10 @@ envsum = summary(env_rda)
 perc_exp = round(envsum$cont$importance[2,'PC1']* 100)
 
 water_df.t3$PC1 = Loadings.samp[,1]
+
+# scree plot
+barplot(envsum$cont$importance[2,],
+         xlab="PC Axis", ylab="% Variation Explained")
 
 # get model for loading vs PC1
 out <- comp_linear_segmented_model(water_df.t3, predictor='plant_mass', lm_outs, 'T3')
@@ -688,6 +737,9 @@ envfit.scores$var = c('Temp', '%DO',  'pH','DOC', 'FI', 'BIX', 'HIX','Sr', 'SUVA
 
 #envfit.scores %>% arrange(factor(env_variable, levels = c('DO.percent','DOC', 'FI', 'BIX', 'HIX', #'SUVA_254','Sr','Temp', 'pH', 'genome_size.mean', "phi.mean", "bacterial growth rate"))) %>% View()
 
+env_temp = envfit.scores; env_temp$var = factor(env_temp$var, levels=c('%DO', 'DOC', 'FI', 'BIX', 'HIX', 'SUVA 254', 'Sr','Temp','pH','genome size', "genomic plasticity", "bacterial growth rate"))
+env_save = rbind(env_save, env_temp %>% arrange(var))
+
 envfit.scores <- envfit.scores %>% filter(pval < 0.05)
 
 x.scale = max(abs(water_df$MDS1))
@@ -723,7 +775,7 @@ t4 = ggplot(water_df.t4, aes(x = -MDS1, y = MDS2)) +
 
 
 ## PC1 vs NMDS1
-envs = sample_data(ps_wat.t4)[,c(20, 24,25,26,27, 28, 29, 31, 32)]
+envs = sample_data(ps_wat.t4)[,c(19, 20, 24,25, 27, 28, 29, 31, 32)]
 scaled.dat <- scale(envs)
 
 # env across all samples
@@ -779,7 +831,9 @@ t4.line.b = ggplot(water_df.t4, aes(x = PC1, y = MDS1)) + geom_point(aes(shape =
 
 ## Figure 3:  arrange all plots
 ```{r}
-View(lm_outs) # Table
+View(lm_outs) # Table S3
+
+View(env_save) #Table S2
 
 # (6-panel)
 leg = get_legend(t4.line.b)
@@ -924,8 +978,18 @@ full_p1 = full_ord +
   annotation_custom(grob = treat_leg, xmin=-0.3, xmax=0, ymin=0.27) 
 ```
 
+# Table 2
+```{r}
+aov.all <- adonis2(phyloseq::distance(final_time, method='bray') ~ sample_type1+sample_type2 + Treatment + plant_mass, 
+                   data=data.frame(sample_data(final_time)))
+
+aov.all
+```
+
+
 ## Figure 5C-E (comparisons)
 ```{r}
+library(reshape2)
 # calculate asv abundances
 bray_dists <- phyloseq::distance(ps_asv_rare, method = 'bray')
 
@@ -1027,9 +1091,9 @@ for(x in unique(rich$sample_type2)) {
     if(y != x ){
      
     out = wilcox.test(rich$Shannon[rich$sample_type2==x], rich$Shannon[rich$sample_type2 == y], alternative = "two.sided")
-    if(out$p.value > 0.05) {
+    if(out$p.value > 0.05) { # print non-significant comparisons
      print(paste0(x, " vs ", y))
-    print(out)
+    # print(out)
     }
     }
   }
@@ -1052,8 +1116,10 @@ dev.off()
 
 # model comparisons
 ```{r}
+unique(long_dists$Comparison)
+
 mod = lm((1-value) ~   plant_mass.x, data =long_dists %>% 
-  filter(Comparison %in% c('mosquito-water')) %>%
+  filter(Comparison %in% c('mosquito-willow', 'mosquito-sage')) %>%
   filter(plant_mass.x == plant_mass.y))
 summary(mod)
 
@@ -1064,9 +1130,10 @@ summary(mod)
 
 library(mgcv)
 
-mod = gam((1-value) ~   plant_mass.x + Sample.Treatment.x, data =long_dists %>% 
-  filter(Comparison %in% c('willow-water')) %>%
+mod = gam((1-value) ~   plant_mass.x, data =long_dists %>% 
+  filter(Comparison %in% c('sage-water')) %>%
   filter(plant_mass.x == plant_mass.y))
+mod
 summary(mod)
 
 anova.gam(mod)
@@ -1265,6 +1332,9 @@ res.all$num_bact = NA
 
 temp = data.frame(path=character(), phylum = character(), count = numeric() )
 
+# temporary hydrogen production variatble
+hyd = NA
+
 # loop through all pathways to calculate how many bacteria are associated
 for(path in res.all$path) {
   
@@ -1278,6 +1348,16 @@ for(path in res.all$path) {
   phy = gsub("_.*", "", names(rowSums(mult)[rowSums(mult) > 0])) #
   
   tot = length(rowSums(mult)[rowSums(mult) > 0]) # total number of taxa that contain pathways
+  
+  # if it's a hydrogen production path, print 
+  if(grepl("yruvate.fermentati", path)){
+    hyd = (names(rowSums(mult)[rowSums(mult) > 0]))
+  }
+  
+  if(sum(grepl("yano", (names(rowSums(mult)[rowSums(mult) > 0]))))>0){
+    print(path)
+    print((names(rowSums(mult)[rowSums(mult) > 0])))
+  }
   
   # if doesn't appear in any taxa, put that in dataframe, else
   # with the pathway, add the associated phyla, individual abundances of each pathway
@@ -1303,6 +1383,9 @@ temp$time = 'T1 & T4'
 #counts = temp %>% dplyr::group_by(path) %>% dplyr::summarise(n = sum(count)) - previous version
 counts = temp %>% dplyr::group_by(path) %>% dplyr::summarise(n = mean(count))
 
+
+# look specifically at bacteria associated with hydrogen production, example:
+temp %>% filter(grepl('ydrogen', path))
 ```
 
 # Figure 3- final version
@@ -1365,21 +1448,101 @@ res.all.new$path.new = c("9-decynoate biosynthesis",
                          "pyruvate fermentation to ethanol III",
                          "sulfite oxidation II")
 
+
+carb_paths <- c("fructoselysine and psicoselysine degradation", "pyruvate fermentation to ethanol III", "(S)-propane-1,2-diol degradation", "L-lysine fermentation to acetate and butanoate", "D-allose degradation", "muropeptide degradation","glucose and glucose-1-phosphate degradation", "pyruvate fermentation to ethanol I", "D-sorbitol degradation II", "glycine degradation (reductive Stickland reaction)")  # replace with your actual paths
+
+#res.all.new <- res.all.new %>%
+#  mutate(label_color = ifelse(path.new %in% carb_paths, "blue", "black"))
+
+label_cols = c('blue', 'blue', 'black', 'blue', 'black', 'blue', 'black', 'black', 'blue', 'blue',
+               'black', 'blue', 'black', 'black', 'blue', 'blue', 'black','blue',  'black', 'black', 'black','black' )
+
 res.all.new.plot <- res.all.new %>% filter(n > 4) %>% filter((padj < 0.01 & abs(log2FoldChange) > 2)) %>%
   ggplot(aes(y = reorder(path.new, log2FoldChange), x = log2FoldChange, color=grp2)) + geom_point() +
   geom_errorbar(aes(xmin=log2FoldChange-lfcSE, xmax=log2FoldChange+lfcSE), width=.2,
                  position=position_dodge(.9)) +geom_vline(xintercept = 0, linetype="dashed",
                 size=0.5, color='gray') + ylab('Metabolic Pathways') +
     scale_color_manual(values = c('#006C67', '#86133B', '#FFB100'), name="significantly\ndifferent on:") + 
-  facet_wrap(.~Time) + theme_bw() 
+  facet_wrap(.~Time) + theme_bw() + 
+  theme(axis.text.y = element_text(color = rev(label_cols)))
+
 
 
 table((res.all.new %>% filter(n >= 4) %>% filter((padj < 0.01 & abs(log2FoldChange) > 2)))$grp2)
 
-pdf("figures/Final/figure3.pdf", height =6, width = 9)
+pdf("figures/Final/figure3_v4.pdf", height =6, width = 9)
 res.all.new.plot
 dev.off()
+
+
+ggsave("~/Desktop/bioretreat_fig2.png", plot = res.all.new.plot, 
+       width = 9, height =7, dpi = 900)
+
+pdf("~/Desktop/bioretreat_fig2.pdf", height =7, width = 9)
+res.all.new.plot
+dev.off()
+
+
+# Reorder path.new based on log2FoldChange
+res.all.new2 <- res.all.new2 %>%
+  filter(n > 4) %>%
+  filter(padj < 0.01 & abs(log2FoldChange) > 2) %>%
+  mutate(reordered_path = reorder(path.new, log2FoldChange))
+
+# Check the levels of reordered_path to ensure we apply the correct color order
+ordered_levels <- levels(res.all.new2$reordered_path)
+
+
+# get correct colors
+label_color = ifelse(ordered_levels %in% carb_paths, "blue", "black")
+
+# Plot with the correct label colors applied
+res.all.new.plot <- res.all.new2 %>%
+  ggplot(aes(y = reordered_path, 
+             x = log2FoldChange, 
+             color = grp2)) + 
+  geom_point() +
+  geom_errorbar(aes(xmin = log2FoldChange - lfcSE, 
+                    xmax = log2FoldChange + lfcSE), 
+                width = .2, 
+                position = position_dodge(.9)) +
+  geom_vline(xintercept = 0, linetype = "dashed", size = 0.5, color = 'gray') + 
+  ylab('Metabolic Pathways') +
+  scale_color_manual(values = c('#006C67', '#86133B', '#FFB100'), 
+                     name = "significantly\ndifferent on:") + 
+  facet_wrap(.~Time) + 
+  theme_bw() +
+  theme(axis.text.y = element_text(color = (label_color)))  # Apply reversed label colors
 ```
+
+#Table S16 - permanova for path abundances
+```{r}
+## genes with ec numbers
+# subset to just water samples and reorder
+bacteria.path_tally_wat = bacteria.path_tally[rownames(bacteria.path_tally) %in% sample_names(ps_pyro_water),]
+bacteria.path_tally_wat = bacteria.path_tally_wat[match(sample_names(ps_pyro_water), rownames(bacteria.path_tally_wat)),]
+
+# check that it worked (should be 0)
+sum(rownames(bacteria.path_tally_wat) != sample_names(ps_pyro_water))
+
+# create distance matrix and run permanova
+# distance matrix and run permanova
+dist_matrix <- vegdist(bacteria.path_tally_wat, method = "bray")
+dim(pivot_df)
+
+# check that metadata is correct order
+meta = data.frame(sample_data(ps_pyro_water))
+
+sum(is.na(dist_matrix)) # check no missing values
+
+permanova_result <- adonis2(dist_matrix ~ Treatment + plant_mass + time, data = meta, permutations = 999)
+
+# Check results
+print(permanova_result)
+
+
+```
+
 
 ## Supplemental Figures
 
@@ -2069,4 +2232,87 @@ print_permanova(aov.all)
 pdf("figures/Final/figureS1.pdf", height=10, width=7)
 ggarrange(plant_pcoa, plank_pcoa, labels=c('A','B'), ncol=1)
 dev.off()
+```
+
+
+# plankton microbiome permanova - Table S15
+```{r}
+library(doBy)
+
+zoop = read.csv("data/zooplankton/Pyro_zoop_cleaned.csv")
+
+# make summary dataframe
+z.mean.density<-summaryBy(Density ~ Tank + Date.collected + Time.point + Treatment + plant.mass..g +
+               spp, data = zoop, FUN = mean)
+
+# pivot to columns
+zoop.all<-pivot_wider(z.mean.density, names_from="spp", values_from="Density.mean")
+zoop.all[is.na(zoop.all)]<-0
+
+zoop.all<-as.data.frame(zoop.all)
+cols2<-c("Time.point", "Tank", "Date.collected", "Treatment")
+zoop.all[cols2] <- lapply(zoop.all[cols2], factor) # make all these factors
+
+##Zooplankton Density stacked bar plot**
+##abundance summing to 1.0
+zoop.comm<-subset(z.mean.density, spp=="calanoid"|spp=="cyclopoid"|spp=="nauplii"|
+             spp=="daphnia"|spp=="ceriodaphnia"|spp=="bosmina"|
+             spp=="kellicottia"|spp=="keratella"|spp=="asplanchna"|
+             spp=="chironomid"|spp=="mayfly"|spp=="mosquito")
+
+# set structure
+make.fac<-c("Time.point", "Treatment", "Tank", "spp")
+zoop.comm[make.fac] <- lapply(zoop.comm[make.fac], factor) # make all these factors
+zoop.comm$plant.mass..g<-as.numeric(zoop.comm$plant.mass..g)
+
+# add single column for samples
+zoop.comm$samp = paste(zoop.comm$Time.point, zoop.comm$Date.collected, zoop.comm$Treatment, zoop.comm$plant.mass..g, zoop.comm$Tank, sep = ".")
+
+
+# pivot zoop.comm (subset) widers
+# convert to wide matrix
+# Pivot, ensuring Density is treated correctly and filling NAs with 0 (optional)
+pivot_df <- pivot_wider(
+  zoop.comm[, c("spp", "Density.mean", "samp")], 
+  names_from = spp, 
+  values_from = Density.mean, 
+  values_fill = 0  # Fill NAs with 0 (optional)
+)
+
+pivot_df = data.frame(pivot_df)
+
+# Set row names to 'samp' and remove the 'samp' column from the matrix
+rownames(pivot_df) <- pivot_df$samp
+pivot_df <- pivot_df[, -1]
+
+pivot_df[is.na(pivot_df)] <- 0
+
+
+# convert to relative abundances
+pivot_df <- pivot_df / rowSums(pivot_df)
+rowSums(pivot_df) # check
+
+pivot_df[is.na(pivot_df)] <- 0
+
+
+# distnace matrix and run permanova
+dist_matrix <- vegdist(pivot_df, method = "bray")
+dim(pivot_df)
+
+# check that metadata is correct order
+temp = as.data.frame(rownames(as.matrix(dist_matrix)))
+metadata <- temp %>%
+  separate(`rownames(as.matrix(dist_matrix))`, into = c("Time", "Date", "Treatment", "Mass", "Tank"), sep = "\\.", remove = FALSE)
+
+metadata$plant_mass = as.numeric(metadata$Mass)
+
+sum(is.na(dist_matrix))
+dist_matrix[is.na(dist_matrix)] <- 0
+
+
+permanova_result <- adonis2(dist_matrix ~ Treatment + plant_mass + Time, data = metadata, permutations = 999)
+
+# Check results
+print(permanova_result)
+
 ```

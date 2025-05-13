@@ -1,0 +1,3881 @@
+---
+title: "Pyro-microbes_final2025"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load necessary packages
+```{r, results=F}
+pacman::p_load('phyloseq', 'ggplot2', 'readxl', 'vegan', 'knitr', 'lme4', 'lmerTest', 'tidyverse', 'magrittr', 'effects', 'plyr', 'dplyr', 'plotrix', 'car',"gridExtra", "cowplot", "tools", "mgcv", "gratia", "MASS", "stats", "tidymv", "sjstats", "coin", "emmeans", "ggpubr")
+
+if (!require("pacman")) install.packages("pacman") # for rapid install if not in library
+
+
+Fig.formatting<-(theme_classic()) +
+  theme(text=element_text(size=10),
+        axis.line=element_blank(),
+        legend.text.align = 0,
+        legend.text=element_text(size=10),
+        #legend.title = element_blank(),
+        panel.border = element_rect(fill=NA, colour = "black", size=1),
+        aspect.ratio=1, 
+        axis.ticks.length=unit(0.25, "cm"),
+        axis.text.y=element_text(
+          margin=unit(c(0.5, 0.5, 0.5, 0.5), "cm"), colour="black", size=10), 
+        axis.text.x=element_text(
+          margin=unit(c(0.5, 0.5, 0.5, 0.5), "cm"), colour="black", size=8)) +
+  theme(legend.key.size = unit(0.4, "cm")) +
+  theme(aspect.ratio=1.3) +
+  theme(panel.spacing=unit(c(0, 0, 0, 0), "cm"))
+
+```
+
+
+# Load Paprica output (data generated following Erazo et al. 2017 pipeline (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8672035/)).
+# 9 total output files from paprica  (equivalent exists for archaea) - only a subset (1, 2, 3, 4, 6, 9) uploaded
+(1) **bacteria.ec_tally** abundance table of copy number-corrected genes with EC numbers.
+(2) **bacteria.edge_data** mean edge parameters per sample
+(3) **bacteria.edge_tally** abundance table for each edge in each sample
+(4) **bacteria.path_tally** abundance table for copy-number corrected pathways in each sample
+(5) **bacteria.seq_edge_map** maps ASVs to edge_number and include proportion placed to the edge number (in case ASV placed to multiple edges)
+(6) **bacteria.taxon_map** tax table for each edge- this maps bacteria.edge_tally to taxonomy
+(7) **bacteria.unique_data** Placement metrics for each ASV present in the sample set.
+(8) **bacteria.unique_edge_abund** large mapping file
+(9) **bacteria_unique_tally** abundance table of copy-number correct ASVS. Equivalent to ASV table produced by typical dada2 bioinformatics pipeline(?)
+```{r}
+# previously loaded all files
+load("data/paprica/2022.06.29_bacteria_paprica_subset.Rdata")
+metadat <- read_excel("data/paprica/pyro_metadata.xlsx")
+```
+
+## add in metadata and environmental data
+```{r} 
+# remove samples that don't appear in both datasets
+metadat.new <- metadat[metadat$Sample_Name != "220410_Pyro_water_58", ] # didn't amplify
+
+## reorder metadat.new to match order of sample names-
+metadat.new <-metadat.new[match(rownames(bacteria.edge_tally), metadat.new$Sample_Name),]
+metadat.new <- data.frame(metadat.new) # change from tibble to df
+rownames(metadat.new)  <- metadat.new$Sample_Name
+sum(rownames(metadat.new) != rownames(bacteria.edge_tally)) # check that they match
+
+## add additional data to metadat file
+## replace codes with full names for plotting
+metadat.new$sample_type2[metadat.new$sample_type2 == 'sg'] = 'sage'
+metadat.new$sample_type2[metadat.new$sample_type2 == 'wi'] = 'willow'
+metadat.new$sample_type2[metadat.new$sample_type2 == 'mos'] = 'mosquito'
+metadat.new$sample_type2[metadat.new$sample_type2 == 'da'] = 'daphnia'
+
+# bin plant mass
+metadat.new$binned_plant_mass <- case_when(
+  metadat.new$plant_mass < 500 & metadat.new$plant_mass > 350 ~ "351-400",
+  metadat.new$plant_mass <= 350 & metadat.new$plant_mass > 300 ~ "301-350",
+  metadat.new$plant_mass <= 300 & metadat.new$plant_mass > 250 ~ "251-300",
+  metadat.new$plant_mass <= 250 & metadat.new$plant_mass > 200 ~ "201-250",
+  metadat.new$plant_mass <= 200 & metadat.new$plant_mass > 150 ~ "151-200",
+  metadat.new$plant_mass <= 150 & metadat.new$plant_mass > 100 ~ "101-150",
+  metadat.new$plant_mass <= 100 & metadat.new$plant_mass > 50 ~ "51-100",
+  metadat.new$plant_mass <= 50 ~ "0-50")
+metadat.new$binned_plant_mass <- 
+  factor(metadat.new$binned_plant_mass, levels =
+           c("0-50","51-100", "101-150", "151-200", "201-250", "251-300", "301-350", "351-400" ))
+
+metadat.new$Sample.Treatment <- paste0(metadat.new$sample_type2, "-", metadat.new$Treatment)
+metadat.new$Sample.Treatment <- factor(metadat.new$Sample.Treatment, 
+                              levels=c('water-burned', 'water-unburned', 'willow-burned',
+                                       'willow-unburned', 'sage-burned', 'sage-unburned',
+                                       'daphnia-burned', 'daphnia-unburned', 'mosquito-burned',
+                                       'mosquito-unburned'))
+
+# READ IN ENVIRONMENTAL DATA
+env_dat <- read_excel("data/Pyro_YSI_data.xlsx")
+env_dat <- env_dat %>% dplyr::select(Time.point, Tank, Temp, DO.percent, DO.mg.l, SPC, C, pH, DOC, TN, FI, BIX, HIX, raw_SUVA, Sr, SUVA_254)
+
+metadat.new <- left_join(metadat.new, env_dat, by=c('time'='Time.point', 'tank'='Tank'))
+
+bact.sub = bacteria.edge_data; bact.sub$Sample_Name = rownames(bact.sub)
+
+metadat.new <- left_join(metadat.new, bact.sub)
+
+rownames(metadat.new) = metadat.new$Sample_Name 
+
+rm(metadat)
+```
+
+# print permanova output function
+```{r}
+print_permanova <- function(aov.out) {
+  av <- data.frame(aov.out)
+  rownames(av)[!is.na(av$F)]
+  out <- paste(paste0(rownames(av)[!is.na(av$F)], ": F=", format(av$F[!is.na(av$F)], digits=3),
+         ", R2=", format(av$R2[!is.na(av$F)], digits=2), 
+         ", p=", format(av$Pr..F.[!is.na(av$F)], digits=2)),collapse="; ")
+  out
+}
+```
+
+
+# make phyloseq object based on rarefied asv table, and phyloseq object based on edgs
+```{r, results=F}
+# make phyloseq object
+ps_asv <- phyloseq(otu_table(bacteria.unique_tally, taxa_are_rows = F), sample_data(metadat.new))
+# remove mock community samples
+ps_asv <- prune_samples(!(sample_data(ps_asv)$sample_type2 %in% c('mock1', 'mock2', 'mock3','blank')), ps_asv)
+
+# save phyloseq_object containing edges
+ps_edge <- phyloseq(otu_table(bacteria.edge_tally, taxa_are_rows = F), sample_data(metadat.new),
+                    tax_table(as.matrix(bacteria.taxon_map)))
+
+# remove mock community samples
+ps_edge <- prune_samples(!(sample_data(ps_edge)$sample_type2 %in% c('mock1', 'mock2', 'mock3','blank')), ps_edge)
+```
+
+
+# check for and remove chloroplast sequences
+```{r}
+set.seed(711)
+# subset edges to only cyanobacteria 
+cyano = rownames(data.frame(tax_table(ps_edge)) %>% filter(phylum == 'Cyanobacteria'))
+
+# read in mapping file
+bacteria.seq_edge_map = read.csv("data/paprica/paprica_all/2022.6.29_pyro.archaea.seq_edge_map.csv")
+
+# select all sequences identified to Cyanobacteria Phylum
+cyano_sub = bacteria.seq_edge_map %>% filter(global_edge_num %in% cyano)
+
+# write out fasta file for blasting against NR database
+fasta_out = paste0(">", cyano_sub$global_edge_num, "\n", cyano_sub$X)
+#write.csv(fasta_out[41:100], "~/Desktop/cyano_seq.fasta", quote=F, row.names=F, col.names=F)
+
+# post-blasting: manually identified chloroplast sequences
+chloroplast_seqs = c('CGTTATCCGGAATTATTGGGCGTAAAGCGTTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCATAGATACCGGAAGGAATACCAATTGCGAAGGCAGGTTGCTACGAATAAACTGACGCTGATGCACGAAAGCG',
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGTTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCTTAGATATGAATTAGAACACCGATTGCGAAGGCAGCTCACTATGCCTATATTGACGCTGAGGCACGAAAGCG', 
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGCTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCGTAGATATGCGGAGGAACACCGATGGCGAAGGCAATCCCCTGGACCTGTACTGACGCTCATGCACGAAAGCG',
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGTTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCGTAGATATGCGGAGGAACACCGATGGCGAAGGCAATCCCCTGGACCTGTACTGACGCTCATGCACGAAAGCG',
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGCTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCGTAGAGATCTGGAGGAATACCGATTGCGAAGGCAGCCCCCTGGACAGTGACTGACGCTCATATGCGAAAGCG',
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGTTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCGTAGAGATCTGGAGGAATACCGATTGCGAAGGCAGCCCCCTGGACAGTGACTGACGCTCATATGCGAAAGCG',
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGTTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCGTAGATATTAGAAGGAACACCAGTGGCGAAGGCGACTGTCTGGGCTGACACTGACGCTGAGGTGCGAAAGCG',
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGTCTGTAGGTGGTCGAGTGTGTTTACTGTTAAAGATTAAAGCTTAACTTTAAAAAGGCATTAAAAACTACTGGACTTGAGTATGATAGAGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCGTAGATATTCGGAAGAACACCAGTGGCGAAGGCGACACACTGGCCCGTTACTGACGCTGAGGCGCGAAAGCG',
+                     'CGTTAATCGGAATTACTGGGCGTAAAGCGTGCGCAGGTGGCCCGGTCAGTCCGCTGTCAAAACCTGGGGCTCAACCCTGGACAGGCGGCGGAGACCACCGGGCTTGAGTCCGGTAGGGGCAGAGGGAATTCCCGGTGGAGCG',
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGTTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCGTAGATATGTGGAGGAATACCAGTGGCGAAGGCGGCCTCCTGGGATAACACTGACGCTCATGTACGAAAGCG',
+                     'CGTTATCCGGAATTATTGGGCGTAAAGCGCTTGTAGGTGGTCGAGTGTGTTTAATGTTAAAGATTAAAGCTTAACTTTAAAACGGCATTAAAAACTACTGGACTTGAGTATGATAGGGGTAAAGGGAATTCCCAGTGTAGCGGTGAAATGCGTAGATATGTGGAGGAATACCAGTGGCGAAGGCGGCCTCCTGGGATAACACTGACGCTCATGTACGAAAGCG')
+
+# remove sequences from ps_asv object
+ps_asv = prune_taxa(!(taxa_names(ps_asv) %in% chloroplast_seqs), ps_asv)
+ps_asv_rare <- rarefy_even_depth(ps_asv, sample.size=min(sample_sums(ps_asv)), rngseed=711)
+
+# remove sequences from ps_edge object (if edges are only associated with chloroplast sequences)
+edges_containing_chlorplasts = bacteria.seq_edge_map$global_edge_num[bacteria.seq_edge_map$X %in% chloroplast_seqs]
+edges_no_chloroplasts = bacteria.seq_edge_map$global_edge_num[!(bacteria.seq_edge_map$X %in% chloroplast_seqs)]
+chloro_only_edges = setdiff(edges_containing_chlorplasts, edges_no_chloroplasts)
+
+ps_edge = prune_taxa(!(taxa_names(ps_edge) %in% chloro_only_edges), ps_edge)
+```
+
+# FIGURE 2a (temporal trajectories)
+```{r}
+ps_pyro_water <- prune_samples(sample_data(ps_asv_rare)$sample_type1 == 'water', ps_asv_rare)
+ord <- ordinate(ps_pyro_water, method = 'NMDS', distance = 'bray')
+ord_df <- cbind(ord$points, sample_data(ps_pyro_water))
+
+ord_df$tank <- as.numeric(ord_df$tank)
+ord_df$tank_num <- as.factor(ord_df$tank)
+
+# plot colors
+cols1 <- c( '#0055B9','#3DA5D9','#73BFB8','#008F08', '#FEC601', '#EA7317', '#611C35', '#F04886')
+rev(cols1)
+#library(scales)
+#show_col(cols1)
+
+ord_df <- ord_df %>% mutate(Time = as.factor(time))
+
+ord_df$time = 'Day-10'
+ord_df$time[ord_df$Time == 'T3'] = 'Day-59'
+ord_df$time[ord_df$Time == 'T4'] = 'Day-89'
+
+
+library(scales)
+# plot binned
+water_pcoa <- ord_df %>% arrange(Time) %>%
+  ggplot(aes(x = MDS1, y = MDS2)) + xlab("NMDS1") + ylab("NMDS2") +
+  geom_point(aes(color = binned_plant_mass, shape=time, group=tank_num),size=4, alpha=0.85) + 
+  geom_path(aes(group = tank_num, linetype=Treatment, color=binned_plant_mass)) + 
+  scale_color_manual(values = rev(cols1) , name='Plant Material (g)') +
+  scale_shape_manual(values = c(15, 16, 17), name='Time') +
+  theme_classic() +
+  guides(color = guide_legend(title.position='top', nrow=3,byrow=T, title.hjust=0.5), linetype=guide_legend(title.position='top', ncol=1, title.hjust=0.5),
+         shape = guide_legend(title.position='top', ncol=1, title.hjust=0.5)) +
+  theme(legend.position='bottom', legend.direction='horizontal')#+
+```
+
+
+# Figure 2b (relative abundance plot)
+```{r}
+## set to edges to relative abundance (do not rarefy)
+ps_edge_water <- prune_samples(sample_data(ps_edge)$sample_type1 == 'water', ps_edge)
+psm = psmelt(ps_edge_water)
+
+# remove clade
+psm = psm[,-c(which(colnames(psm)=='clade'))]
+
+# ps is phyloseq obj, pm is melted, top is number of items, tax level is pm$Genus or pm$Phylum- whatever the tax is
+getTopX = function(ps, pm, top, tax_name) {
+  
+  # get column with taxa id
+  taxa_get = c('p', 'c','o','f','g','s')
+  ind = which(substr(tax_name, 1, 1) == taxa_get)
+  if(identical(ind, integer(0))) {
+    taxa_get = c('P', 'C','O','F','G','S')
+    ind = which(substr(tax_name, 1, 1) == taxa_get) 
+    tax_name <- sub('^(\\w?)', '\\U\\1', tax_name, perl=T)
+    print(tax_name)
+ }
+  
+  # get starting index id
+  start.ind = which(colnames(pm) == tax_name)
+  tax_name <- tolower(tax_name)
+   if(identical(start.ind, integer(0))) {
+      start.ind = which(colnames(pm) == (tax_name))
+   }
+  
+  # get list of columns
+  temp = (pm[,(start.ind-(ind-1)):start.ind])
+  full.tax <- apply(temp,1, paste,collapse=":")
+
+  pm$full_tax = full.tax
+  
+  # get top X taxa (based on input)
+  topX = (pm %>% group_by(full_tax) %>% dplyr::summarise(m = mean(Abundance)) %>%
+    arrange(-m))$full_tax[1:top]
+  topX.tf <- pm$full_tax %in% topX
+  topX.all = full.tax
+  
+  topX.all[!topX.tf] = paste0(pm$phylum[!topX.tf] , ":")
+
+  return(topX.all)
+}
+
+psm$topX = getTopX(ps_edge_water, psm, 15, 'class')
+
+library(RColorBrewer)
+getPalette = colorRampPalette(c('#503D42','#405B42', '#208EF9','#F5FBEF','#84C318', '#CA054D', '#3B1C32','#A4D4B4', '#FFCF9C', '#67388C'))
+
+# filter out taxa to keep
+keep = (psm %>% filter(sample_type1 == 'water') %>% filter(topX != ":") %>%
+  group_by(Sample) %>%  
+  dplyr::mutate(tot = sum(Abundance)) %>%  # find the total abundance for a species within a given location
+  group_by(Sample, topX) %>% # include these to ensure metadata available post-summarizing
+  dplyr::summarise(rel_abund = sum(Abundance)/tot) %>%group_by(topX) %>%
+  dplyr::summarise(m = max(rel_abund)) %>% arrange(-m))$topX[1:20]
+
+# rename to other
+psm$topX[!(psm$topX %in% keep) ] = 'Other'
+
+
+df = data.frame(topX = sort(unique(psm$topX)))
+df$phy = (gsub(":.*", "", df$topX))
+df$cols = character(nrow(df))
+
+cols = ((rainbow(length(unique(df$phy)))))
+
+# get colors so that phyla are all the same shade
+i = 1
+count = 1
+while(count <= length(unique(df$phy))) {
+  print(i)
+  print(count)
+  phy_col = unique(df$phy)[count]
+  l = sum(df$phy == phy_col)
+  #print(l)
+  
+  getPalette = colorRampPalette(c('#FFFFFF', cols[count], '#000000'))
+  set_cols = getPalette(l + 2)
+  
+  j = 1
+  while(j < (1+l)) {
+    df$cols[i] = set_cols[j+1]
+    j = j + 1
+    i = i + 1
+  }
+  count = count + 1
+} 
+
+# manually shift colors
+df$cols[df$phy == 'Other'] = '#1E7037'
+df$cols[df$phy == 'Spirochaetes'] = '#CEA2FF'
+df$cols[df$phy == 'Tenericutes'] = '#8B49D3'
+df$cols[df$phy == 'Cyanobacteria'] = '#55C12D'
+
+
+# update data frame for plotting
+psm1 <- left_join(psm, df)
+
+psm1 %>% filter(sample_type1 == 'water') %>% filter(topX != ":") 
+
+df = rbind(df[-which(df$topX == 'Other'),], df[which(df$topX == 'Other'),])
+df$topX[grepl(":$", df$topX)] = paste0(df$topX[grepl(":$", df$topX)], "Other")
+
+psm1$topX[grepl(":$", psm1$topX)] = paste0(psm1$topX[grepl(":$", psm1$topX)], "Other")
+
+psm1$topX = factor(psm1$topX, levels = c(df$topX[-which(df$topX == 'Other')], 'Other'))
+
+psm1$Time = 'Day-10'
+psm1$Time[psm1$time == 'T3'] = 'Day-59'
+psm1$Time[psm1$time == 'T4'] = 'Day-89'
+
+# plot
+rel_abund = psm1 %>% filter(sample_type1 == 'water') %>% filter(topX != ":") %>%
+  group_by(Sample) %>% ungroup() %>%
+  dplyr::mutate(tot = sum(Abundance, na.rm=T)) %>%  # find the total abundance for a species within a given location
+  group_by(Sample, phylum, family, Time, Treatment, plant_mass, topX) %>% # include these to ensure metadata available post-summarizing
+  dplyr::summarise(rel_abund = sum(Abundance, na.rm=T)/tot) %>% # find the abundance of the top 20 phylum
+  ggplot() + 
+  geom_bar(aes(x=as.factor(plant_mass), y=rel_abund, fill=topX), #each horizontal bar unique to location and species
+           stat="identity", position="fill", width=.9) + # stat=identity-> provide x values with rel_abund
+# theme_grey() +
+  facet_grid(Treatment~Time, scales='free_x', space='free_x') +
+  scale_fill_manual(values = df$cols, breaks=df$topX) + #+ 
+  #split by species, scales vary across rows, size proportional to y values, switch y axis labels
+  xlab('Plant Material (g)') +
+  labs(fill="Phylum:Class") + ylab("Relative Abundance") +
+ guides(fill = guide_legend(ncol=1)) +
+  theme_bw() + theme(panel.spacing = unit(.4, "lines"),
+                       axis.text.x =element_text(size = 7, angle=90,vjust=0.5, hjust =0.5)) 
+
+
+png(filename = "figures/Final/figure2.png", width = 11000 , height = 6080, units = "px", type = "quartz", pointsize = 12, res = 800)
+ggarrange(water_pcoa, rel_abund, nrow = 1, labels = c('A', 'B'), widths = c(0.41, 0.59))
+dev.off()
+```
+
+# Table 1
+```{r}
+aov.all <- adonis2(phyloseq::distance(ps_pyro_water, method='bray') ~ Treatment + plant_mass + time, 
+                   data=data.frame(sample_data(ps_pyro_water)))
+aov.all
+```
+
+# Table S1
+```{r}
+# test different bins
+perm_results <- data.frame(df = numeric(), ss = numeric(), r2 = numeric(), f = numeric(), pval = numeric(), cutoff = numeric())
+vals <- sort(unique(sample_data(ps_pyro_water)$plant_mass))
+
+for(i in vals) {
+  sample_data(ps_pyro_water)$binning <- sample_data(ps_pyro_water)$plant_mass <= i
+  aov.all <- adonis2(phyloseq::distance(ps_pyro_water, method='bray') ~ binning, 
+                   data=data.frame(sample_data(ps_pyro_water)))
+  temp <- data.frame(aov.all)
+  temp$cutoff = i
+  perm_results <- rbind(perm_results, temp[1,])
+}
+
+kable(perm_results)
+```
+
+# Figure 3
+```{r}
+#library(ggpmisc)
+library(segmented)
+
+lm_outs = data.frame(time = character(), comp = character(), f.stat = numeric(), df = character(), r2 = numeric(), pval = numeric())
+```
+
+# necessary function for comparisons
+```{r}
+# function runs a linear model and segmented model and compares to find which better fits the data
+comp_linear_segmented_model = function(wat.df, predictor=c('plant_mass', 'PC1'), lm_outs, time) {
+  
+# linear model
+if(predictor == 'plant_mass') {
+  my.lm <- lm(PC1 ~ plant_mass, data = wat.df)
+summary(my.lm)
+
+x = summary(my.lm)
+
+lm_outs = rbind(lm_outs, data.frame(time = time, comp='loading_vs_pc1',f.stat= x$fstatistic[1],
+                                    df=paste0(x$fstatistic[2], ", ", x$fstatistic[3]),
+                                    r2=x$adj.r.squared, pval=x$coefficients[2, 4]))
+
+# breakpoint analysis
+my.seg <- segmented(my.lm, 
+                    seg.Z = ~plant_mass, 
+                   npsi = 1)
+
+#TukeyHSD(an)
+
+x=summary(my.seg)
+
+lm_outs = rbind(lm_outs, data.frame(time = time, comp='loading_vs_pc1_break',f.stat= x$fstatistic[1],
+                                    df=paste0(x$fstatistic[2], ", ", x$fstatistic[3]),
+                                    r2=x$adj.r.squared, pval=x$coefficients[2, 4]))
+
+an = anova(my.lm, my.seg)
+
+lm_outs <- rbind(lm_outs, data.frame(time =time, comp='anova_loading_vs_pc1', f.stat=an$F[2],df = paste0(an$Df[2], ", ", an$Res.Df[2]),
+                                     r2=NA, pval=an$`Pr(>F)`[2]))
+
+  if(an$`Pr(>F)`[2] < 0.01) {return(list(my.seg, lm_outs))} else{
+    return(list(my.lm, lm_outs))
+  }
+
+}   
+if(predictor == 'PC1') {
+  my.lm <- lm(MDS1 ~ PC1, data = wat.df)
+summary(my.lm)
+
+x = summary(my.lm)
+
+lm_outs = rbind(lm_outs, data.frame(time = time, comp='pc1_vs_mds1',f.stat= x$fstatistic[1],
+                                    df=paste0(x$fstatistic[2], ", ", x$fstatistic[3]),
+                                    r2=x$adj.r.squared, pval=x$coefficients[2, 4]))
+
+# breakpoint analysis
+my.seg <- segmented(my.lm, 
+                    seg.Z = ~PC1, 
+                   npsi = 1)
+
+x=summary(my.seg)
+
+lm_outs = rbind(lm_outs, data.frame(time = time, comp='pc1_vs_mds1_seg',f.stat= x$fstatistic[1],
+                                    df=paste0(x$fstatistic[2], ", ", x$fstatistic[3]),
+                                    r2=x$adj.r.squared, pval=x$coefficients[2, 4]))
+
+an = anova(my.lm, my.seg)
+
+lm_outs <- rbind(lm_outs, data.frame(time =time, comp='anova_pc1_vs_mds1', f.stat=an$F[2],df = paste0(an$Df[2], ", ", an$Res.Df[2]),
+                                     r2=NA, pval=an$`Pr(>F)`[2]))
+    if(an$`Pr(>F)`[2] < 0.01) {return(list(my.seg, lm_outs))} else{
+    return(list(my.lm, lm_outs))
+  }
+} 
+}
+
+ps_wat = ps_pyro_water # create new phyloseq variable
+
+# variable for table S2
+env_save = data.frame(MDS1=numeric(),MDS2=numeric(), env_variable=character(),  
+                      pval=numeric(), r2=numeric(), type=character(),var=character())
+```
+
+# Figure 3a
+```{r}
+### T1 plot
+ps_wat.t1 <- prune_samples( sample_data(ps_wat)$time == 'T1', ps_wat)
+ord = ordinate(ps_wat.t1, method = 'NMDS', distance = 'bray')
+#plot_ordination(ps_wat.t1, ord, color = 'plant_mass')
+water_df = cbind(ord$points, sample_data(ps_wat.t1))
+colnames(sample_data(ps_wat.t1))
+
+
+envvec =  vegan::envfit(ord = ord$points, env=sample_data(ps_wat.t1)[,c(19, 20, 24,25, 27, 28, 29, 31, 32, 39,43,47)],  perm=999, na.rm=T)
+
+# convert scores to dataframe for plotting
+envfit.scores <- as.data.frame(vegan::scores(envvec, display = "vectors"))
+envfit.scores <- cbind(envfit.scores,  env_variable= rownames(envfit.scores), 
+                       pval = envvec$vectors$pvals, r2=envvec$vectors$r) 
+
+envfit.scores$type = 'Environmental Variable'
+envfit.scores$type[envfit.scores$env_variable %in% 
+                     c( "genome_size.mean", "phi.mean","gRodon.d.mean")] = 'Bacterial Genome Characteristic'
+envfit.scores$env_variable
+envfit.scores$var = c('Temp', '%DO',  'pH','DOC', 'FI', 'BIX', 'HIX','Sr', 'SUVA 254', 'genome size', "genomic plasticity", "bacterial growth rate")
+
+#envfit.scores %>% arrange(factor(env_variable, levels = c('DO.percent','DOC', 'FI', 'BIX', 'HIX', #'SUVA_254','Sr','Temp', 'pH', 'genome_size.mean', "phi.mean", "bacterial growth rate"))) %>% View()
+
+env_temp = envfit.scores; env_temp$var = factor(env_temp$var, levels=c('%DO', 'DOC', 'FI', 'BIX', 'HIX', 'SUVA 254', 'Sr','Temp','pH','genome size', "genomic plasticity", "bacterial growth rate"))
+env_save = rbind(env_save, env_temp %>% arrange(var))
+
+envfit.scores <- envfit.scores %>% filter(pval < 0.05)
+
+x.scale = max(abs(water_df$MDS1))
+y.scale = max(abs(water_df$MDS2))
+
+# move labels
+envfit.scores$x.text = envfit.scores$MDS1*x.scale+
+  c(0.028, 0.013, 0, -0.026, 0.031,0.015, 0, 0, 0, -0.03)
+envfit.scores$y.text = envfit.scores$MDS2*y.scale+
+ c(0.0,-0.01, -0.02, 0, 0,0, 0.018, -0.017, 0.02, 0.018 )
+
+water_df.t1 = water_df
+envfit.scores.t1 = envfit.scores
+
+x.scale.t1 = x.scale
+y.scale.t1 = y.scale
+
+#plot ordination with vectors
+t1 = ggplot(water_df.t1, aes(x = MDS1, y = MDS2)) +
+      geom_point(aes( size=plant_mass, shape=Treatment)) +
+  geom_segment(data = envfit.scores.t1,
+               aes(x = 0, xend = MDS1*x.scale.t1, y = 0, yend = MDS2*y.scale.t1, color=type),
+               arrow = arrow(length = unit(0.25, "cm"))) +
+  geom_text(data = envfit.scores.t1, aes(x = x.text, y = y.text, label = var),size=3) +
+  scale_shape_manual(values=c(19, 1))+
+  scale_color_manual(values = c('#DF4545', "#898887"), guide='none') +
+  labs(size = 'Plant Material (g)')+
+  xlab("NMDS1") + ylab("NMDS2") +
+  theme_classic()  +
+  guides(shape = guide_legend(title.position='top', nrow=1, title.hjust=0.5), size=guide_legend(title.position='top', nrow=1, title.hjust=0.5)) +
+  theme(legend.position='bottom', legend.direction='horizontal')
+
+
+## PC1 vs NMDS1
+envs = sample_data(ps_wat.t1)[,c(19, 20, 24,25, 27, 28, 29, 31, 32)]
+colnames(sample_data(ps_wat.t1))
+scaled.dat <- scale(envs)
+
+# env across all samples
+env_rda <- rda(scaled.dat)
+Loadings.samp = env_rda$CA$u
+envsum = summary(env_rda)
+perc_exp = round(envsum$cont$importance[2,'PC1']* 100)
+
+water_df.t1$PC1 = Loadings.samp[,1]
+
+# scree plot
+barplot(envsum$cont$importance[2,],
+         xlab="PC Axis", ylab="% Variation Explained")
+scree = data.frame(perc = envsum$cont$importance[2,] + 0.14)
+
+# get model for loading vs PC1
+out <- comp_linear_segmented_model(water_df.t1, predictor='plant_mass', lm_outs, 'T1')
+lm_outs = out[[2]]
+mod <- out[[1]]
+mod_plotting = data.frame(xx = water_df.t1$plant_mass, yy = broken.line(mod)$fit)
+
+r2 = summary(mod)$adj.r.squared
+lb1 <- paste("R^2 == ", round(r2,3))
+
+# plot environment vs loading level (best)
+t1.line.a   = ggplot(water_df.t1) + geom_point(aes(shape = Treatment, x = plant_mass, y = PC1, size= plant_mass)) + 
+  #stat_smooth(data = water_df.t1 %>% filter(plant_mass < 50), method = 'lm',se=F, linetype='dashed', size=0.7, color = 'grey') + 
+  geom_line(data = mod_plotting, aes(x = xx, y = yy), color = 'grey', linetype='dashed') +
+  theme_bw() + 
+  #ggtitle('Day 10') + 
+  xlab('Plant Material (g)') +
+  guides(size=guide_legend(title="Plant Material (g)")) +
+  #stat_poly_eq(label.x = 'right', label.y='top') +
+  scale_shape_manual(values=c(1, 19))+
+  ylab(paste0('PC1 (env, ',perc_exp,'% variance explained)')) +
+    annotate("text", x=345, y=0.35, label=lb1, parse=TRUE)
+
+
+# get model for pc1 vs mds1
+out <- comp_linear_segmented_model(water_df.t1, predictor='PC1', lm_outs, 'T1')
+lm_outs = out[[2]]
+mod <- out[[1]]
+mod_plotting = data.frame(xx = water_df.t1$PC1, yy = (mod)$fit)
+
+r2 = summary(mod)$adj.r.squared
+lb2 <- paste("R^2 == ", round(r2,3))
+
+# plot environment vs microbiome
+t1.line.b = ggplot(water_df.t1, aes(x = PC1, y = MDS1)) + geom_point(aes(shape = Treatment, size= plant_mass)) + 
+  geom_line(data = mod_plotting, aes(x = xx, y = yy), color = 'grey', linetype='dashed') + theme_bw() + 
+  #ggtitle('Day 10') + 
+  xlab(paste0('PC1 (env, ',perc_exp,'% variance explained)')) +
+  scale_shape_manual(values=c(1, 19))+
+    guides(size=guide_legend(title="Plant Material (g)")) +
+  ylab('NMDS1 (microbiome)')  +
+  annotate("text", x=min(water_df.t1$PC1)+.08, y=max(water_df.t1$MDS1)+0.01, label=lb2, parse=TRUE)
+```
+
+
+# Figure 3b
+```{r}
+### T3 plot
+ps_wat.t3 <- prune_samples( sample_data(ps_wat)$time == 'T3', ps_wat)
+ord = ordinate(ps_wat.t3, method = 'NMDS', distance = 'bray')
+#plot_ordination(ps_wat.t1, ord, color = 'plant_mass')
+water_df = cbind(ord$points, sample_data(ps_wat.t3))
+colnames(sample_data(ps_wat))
+
+## impute missing values at unburned 200g - this will not get used
+sample_data(ps_wat.t3)$sg_sum[sample_names(ps_wat.t3)=='220410_Pyro_water_39'] = 4725908
+sample_data(ps_wat.t3)$af_sum[sample_names(ps_wat.t3)=='220410_Pyro_water_39'] = 600821.5
+
+# convert scores to dataframe for plotting
+envvec =  vegan::envfit(ord = ord$points, env=sample_data(ps_wat.t3)[,c(19, 20, 24,25, 27, 28, 29, 31, 32, 39,43,47)],  perm=999, na.rm=T)
+
+
+envfit.scores <- as.data.frame(vegan::scores(envvec, display = "vectors"))
+envfit.scores <- cbind(envfit.scores,  env_variable= rownames(envfit.scores), 
+                       pval = envvec$vectors$pvals, r2=envvec$vectors$r) 
+
+envfit.scores$type = 'Environmental Variable'
+envfit.scores$type[envfit.scores$env_variable %in% 
+                     c( "genome_size.mean", "phi.mean","gRodon.d.mean")] = 'Bacterial Genome Characteristic'
+envfit.scores$env_variable
+envfit.scores$var = c('Temp', '%DO',  'pH','DOC', 'FI', 'BIX', 'HIX','Sr', 'SUVA 254', 'genome size', "genomic plasticity", "bacterial growth rate")
+
+#envfit.scores %>% arrange(factor(env_variable, levels = c('DO.percent','DOC', 'FI', 'BIX', 'HIX', #'SUVA_254','Sr','Temp', 'pH', 'genome_size.mean', "phi.mean", "bacterial growth rate"))) %>% View()
+
+env_temp = envfit.scores; env_temp$var = factor(env_temp$var, levels=c('%DO', 'DOC', 'FI', 'BIX', 'HIX', 'SUVA 254', 'Sr','Temp','pH','genome size', "genomic plasticity", "bacterial growth rate"))
+env_save = rbind(env_save, env_temp %>% arrange(var))
+
+
+envfit.scores <- envfit.scores %>% filter(pval < 0.05)
+
+x.scale = max(abs(water_df$MDS1))
+y.scale = max(abs(water_df$MDS2))
+
+# move labels on vectors
+envfit.scores$x.text = envfit.scores$MDS1*x.scale + 
+  c(0.027,0.01,-0.02, 0.025, 0,0.013, -0.05, -0.08, -0.11)
+envfit.scores$y.text = envfit.scores$MDS2*y.scale + 
+  c(0, 0,-0.005, 0, 0.03,0,0, 0.011, 0.013 )
+
+water_df.t3 = water_df
+envfit.scores.t3 = envfit.scores
+
+x.scale.t3 = x.scale
+y.scale.t3 = y.scale
+
+# plot ordinaiton
+t3 = ggplot(water_df.t3, aes(x = MDS1, y = MDS2)) +
+      geom_point(aes( size=plant_mass, shape=Treatment)) +
+  geom_segment(data = envfit.scores.t3,
+               aes(x = 0, xend = MDS1*x.scale.t3, y = 0, yend = MDS2*y.scale.t3, color=type),
+               arrow = arrow(length = unit(0.25, "cm"))) +
+  geom_text(data = envfit.scores.t3, aes(x = x.text, y = y.text, label = var),size=3) +
+  scale_shape_manual(values=c(19, 1))+
+  scale_color_manual(values = c('#DF4545', "#898887"), guide='none') +
+  labs(size = 'Plant Material (g)')+
+   theme_classic()  +
+  guides(shape = guide_legend(title.position='top', nrow=1, title.hjust=0.5), size=guide_legend(title.position='top', nrow=1, title.hjust=0.5)) +
+  theme(legend.position='bottom', legend.direction='horizontal')+
+  xlab("NMDS1") + ylab("NMDS2") 
+
+
+## PC1 vs NMDS1
+envs = sample_data(ps_wat.t3)[,c(19, 20, 24,25, 27, 28, 29, 31, 32)]
+
+scaled.dat <- scale(envs)
+
+# env across all samples
+env_rda <- rda(scaled.dat)
+Loadings.samp = env_rda$CA$u
+envsum = summary(env_rda)
+perc_exp = round(envsum$cont$importance[2,'PC1']* 100)
+
+water_df.t3$PC1 = Loadings.samp[,1]
+
+# scree plot
+barplot(envsum$cont$importance[2,],
+         xlab="PC Axis", ylab="% Variation Explained")
+
+# get model for loading vs PC1
+out <- comp_linear_segmented_model(water_df.t3, predictor='plant_mass', lm_outs, 'T3')
+lm_outs = out[[2]]
+mod <- out[[1]]
+mod_plotting = data.frame(xx = water_df.t3$plant_mass, yy = (mod)$fit)
+
+r2 = summary(mod)$adj.r.squared
+lb3 <- paste("R^2 == ", round(r2,3))
+
+# plot environment vs loading level (best)
+
+t3.line.a   = ggplot(water_df.t3) + geom_point(aes(shape = Treatment, x = plant_mass, y = PC1, size= plant_mass)) + 
+  #stat_smooth(data = water_df.t1 %>% filter(plant_mass < 50), method = 'lm',se=F, linetype='dashed', size=0.7, color = 'grey') + 
+  geom_line(data = mod_plotting, aes(x = xx, y = yy), color = 'grey', linetype='dashed') +
+ #stat_smooth(method = 'lm', aes(x = plant_mass, y = PC1, linetype=Treatment))+
+  theme_bw() + 
+  #ggtitle('Day 59') + 
+  xlab('Plant Material (g)') +
+  guides(size=guide_legend(title="Plant Material (g)")) +
+  #stat_poly_eq(label.x = 'right', label.y='top') +
+  scale_shape_manual(values=c(1, 19))+
+  ylab(paste0('PC1 (env, ',perc_exp,'% variance explained)')) +
+    annotate("text", x=35, y=max(water_df.t3$PC1)+.01, label=lb3, parse=TRUE)
+
+
+# get model for pc1 vs mds1
+out <- comp_linear_segmented_model(water_df.t3, predictor='PC1', lm_outs, 'T3')
+lm_outs = out[[2]]
+mod <- out[[1]]
+mod_plotting = data.frame(xx = water_df.t3$PC1, yy = (mod)$fit)
+
+r2 = summary(mod)$adj.r.squared
+lb4 <- paste("R^2 == ", round(r2,3))
+
+# plot environment vs microbiome
+t3.line.b = ggplot(water_df.t3, aes(x = PC1, y = MDS1)) + geom_point(aes(shape = Treatment, size= plant_mass)) + 
+  geom_line(data = mod_plotting, aes(x = xx, y = yy), color = 'grey', linetype='dashed') + theme_bw() + 
+  #ggtitle('Day 59') + 
+  xlab(paste0('PC1 (env, ',perc_exp,'% variance explained)')) +
+  scale_shape_manual(values=c(1, 19))+
+    guides(size=guide_legend(title="Plant Material (g)")) +
+  ylab('NMDS1 (microbiome)')  +
+  annotate("text", x=max(water_df.t3$PC1)-.08, y=max(water_df.t3$MDS1), label=lb4, parse=TRUE)
+```
+
+# Figure 3c
+```{r}
+### T4 plot
+ps_wat.t4 <- prune_samples( sample_data(ps_wat)$time == 'T4', ps_wat)
+ord = ordinate(ps_wat.t4, method = 'NMDS', distance = 'bray')
+water_df = cbind(ord$points, sample_data(ps_wat.t4))
+colnames(sample_data(ps_wat))
+
+envvec =  vegan::envfit(ord = ord$points, env=sample_data(ps_wat.t4)[,c(19, 20, 24,25, 27, 28, 29, 31, 32, 39,43,47)],  perm=999, na.rm=T)
+# convert scores to dataframe for plotting
+envfit.scores <- as.data.frame(vegan::scores(envvec, display = "vectors"))
+envfit.scores <- cbind(envfit.scores,  env_variable= rownames(envfit.scores), 
+                       pval = envvec$vectors$pvals, r2=envvec$vectors$r) 
+
+envfit.scores$type = 'Environmental Variable'
+envfit.scores$type[envfit.scores$env_variable %in% 
+                     c( "genome_size.mean", "phi.mean","gRodon.d.mean")] = 'Bacterial Genome Characteristic'
+envfit.scores$env_variable
+envfit.scores$var = c('Temp', '%DO',  'pH','DOC', 'FI', 'BIX', 'HIX','Sr', 'SUVA 254', 'genome size', "genomic plasticity", "bacterial growth rate")
+
+#envfit.scores %>% arrange(factor(env_variable, levels = c('DO.percent','DOC', 'FI', 'BIX', 'HIX', #'SUVA_254','Sr','Temp', 'pH', 'genome_size.mean', "phi.mean", "bacterial growth rate"))) %>% View()
+
+env_temp = envfit.scores; env_temp$var = factor(env_temp$var, levels=c('%DO', 'DOC', 'FI', 'BIX', 'HIX', 'SUVA 254', 'Sr','Temp','pH','genome size', "genomic plasticity", "bacterial growth rate"))
+env_save = rbind(env_save, env_temp %>% arrange(var))
+
+envfit.scores <- envfit.scores %>% filter(pval < 0.05)
+
+x.scale = max(abs(water_df$MDS1))
+y.scale = max(abs(water_df$MDS2))
+
+# move labels on vectors
+envfit.scores$x.text = envfit.scores$MDS1*x.scale + 
+  c(-0.03, 0, 0.015, -0.02, 0.08, 0, 0.03, 0)
+envfit.scores$y.text = envfit.scores$MDS2*y.scale + 
+  c(0.0,0,  0.03, 0, -0.02,0,  0.02, 0.02)
+
+x.scale.t4 = x.scale
+y.scale.t4 = y.scale
+
+
+water_df.t4 = water_df
+envfit.scores.t4 = envfit.scores
+
+# plot ordination
+t4 = ggplot(water_df.t4, aes(x = -MDS1, y = MDS2)) +
+      geom_point(aes( size=plant_mass, shape=Treatment)) +
+  geom_segment(data = envfit.scores.t4,
+               aes(x = 0, xend = MDS1*x.scale.t4*-1, y = 0, yend = MDS2*y.scale.t4, color=type),
+               arrow = arrow(length = unit(0.25, "cm"))) +
+  geom_text(data = envfit.scores.t4, aes(x = x.text*-1, y = y.text, label = var),size=3) +
+  scale_shape_manual(values=c(19, 1))+
+  scale_color_manual(values = c('#DF4545', "#898887"), guide='none') +
+  labs(size = 'Plant Material (g)')+
+   theme_classic()  +
+  guides(shape = guide_legend(title.position='top', nrow=1, title.hjust=0.5), size=guide_legend(title.position='top', nrow=1, title.hjust=0.5)) +
+  theme(legend.position='bottom', legend.direction='horizontal') +
+    xlab("-NMDS1") + ylab("NMDS2")
+
+
+## PC1 vs NMDS1
+envs = sample_data(ps_wat.t4)[,c(19, 20, 24,25, 27, 28, 29, 31, 32)]
+scaled.dat <- scale(envs)
+
+# env across all samples
+env_rda <- rda(scaled.dat)
+Loadings.samp = env_rda$CA$u
+envsum = summary(env_rda)
+perc_exp = round(envsum$cont$importance[2,'PC1']* 100)
+
+water_df.t4$PC1 = Loadings.samp[,1]
+
+# get model for loading vs PC1
+out <- comp_linear_segmented_model(water_df.t4, predictor='plant_mass', lm_outs, 'T4')
+lm_outs = out[[2]]
+mod <- out[[1]]
+mod_plotting = data.frame(xx = water_df.t4$plant_mass, yy = (mod)$fit)
+
+r2 = summary(mod)$adj.r.squared
+lb5 <- paste("R^2 == ", round(r2,3))
+
+# plot environment vs loading level (best)
+t4.line.a   = ggplot(water_df.t4) + geom_point(aes(shape = Treatment, x = plant_mass, y = PC1, size= plant_mass)) + 
+  #stat_smooth(data = water_df.t1 %>% filter(plant_mass < 50), method = 'lm',se=F, linetype='dashed', size=0.7, color = 'grey') + 
+  geom_line(data = mod_plotting, aes(x = xx, y = yy), color = 'grey', linetype='dashed') +
+  theme_bw() + 
+  #ggtitle('Day 89') + 
+  xlab('Plant Material (g)') +
+  guides(size=guide_legend(title="Plant Material (g)")) +
+  #stat_poly_eq(label.x = 'right', label.y='top') +
+  scale_shape_manual(values=c(1, 19))+
+  ylab(paste0('PC1 (env, ',perc_exp,'% variance explained)')) +
+    annotate("text", x=350, y=max(water_df.t4$PC1)-0.05, label=lb5, parse=TRUE)
+
+
+# get model for pc1 vs mds1
+out <- comp_linear_segmented_model(water_df.t4, predictor='PC1', lm_outs, 'T4')
+lm_outs = out[[2]]
+mod <- out[[1]]
+mod_plotting = data.frame(xx = water_df.t4$PC1, yy = (mod)$fit)
+
+r2 = summary(mod)$adj.r.squared
+lb6 <- paste("R^2 == ", round(r2,3))
+
+# plot environment vs microbiome
+t4.line.b = ggplot(water_df.t4, aes(x = PC1, y = MDS1)) + geom_point(aes(shape = Treatment, size= plant_mass)) + 
+  geom_line(data = mod_plotting, aes(x = xx, y = yy), color = 'grey', linetype='dashed') + theme_bw() +
+  #ggtitle('Day 89') + 
+  xlab(paste0('PC1 (env, ',perc_exp,'% variance explained)')) +
+  scale_shape_manual(values=c(1, 19))+
+    guides(size=guide_legend(title="Plant Material (g)")) +
+  ylab('NMDS1 (microbiome)')  +
+  annotate("text", x=max(water_df.t4$PC1)-.08, y=max(water_df.t4$MDS1)-0.05, label=lb6, parse=TRUE)
+```
+
+## Figure 3:  arrange all plots
+```{r}
+(lm_outs) # Table S3
+
+(env_save) #Table S2
+
+# (6-panel)
+leg = get_legend(t4.line.b)
+p1 =ggarrange(t1, t1.line.a, t1.line.b, common.legend=T, ncol=3, legend='none', widths=c(0.4, 0.3, 0.3) )
+p2 =ggarrange(t3, t3.line.a, t3.line.b, common.legend=T, ncol=3, legend='none', widths=c(0.4, 0.3, 0.3))
+p3 = ggarrange(t4, t4.line.a, t4.line.b, common.legend=T, ncol=3, legend='none',widths=c(0.4, 0.3, 0.3))
+
+pdf("figures/Final/figure3.pdf", height=11, width=14)
+ggarrange(p1, p2, p3, ncol=1, common.legend=T, legend='right', legend.grob=leg, labels = c('A', 'B', 'C'))
+dev.off()
+```
+# Figure S8 - environmental PCoA plots
+```{r}
+envs = sample_data(ps_wat.t1)[,c(20, 24,25,26,27, 28, 29, 31, 32)] #extract relevant columns
+scaled.dat <- scale(envs) # scale
+
+env_rda <- rda(scaled.dat)
+Loadings.samp = env_rda$CA$u
+
+envsum = summary(env_rda)
+perc_exp.x.t1 = round(envsum$cont$importance[2,'PC1']* 100)
+perc_exp.y.t1 = round(envsum$cont$importance[2,'PC2']* 100)
+
+
+t1 = data.frame(Loadings.samp, sample_data(ps_wat.t1))
+
+t1.pc = ggplot(t1) + geom_point(aes(x = PC1, y = PC2, size = plant_mass, shape = Treatment)) +
+  scale_shape_manual(values=c(19, 1))+
+  labs(size = 'Plant Material (g)')+
+   theme_classic()  +
+  guides(shape = guide_legend(title.position='top', nrow=1, title.hjust=0.5), size=guide_legend(title.position='top', nrow=1, title.hjust=0.5)) +
+  theme(legend.position='bottom', legend.direction='horizontal') +
+    xlab(paste0("PC1 [",perc_exp.x.t1, "%]" )) + 
+  ylab(paste0("PC2 [",perc_exp.y.t1, "%]" )) + ggtitle("Day-10")
+
+# day 59
+envs = sample_data(ps_wat.t3)[,c(20, 24,25,26,27, 28, 29, 31, 32)]
+scaled.dat <- scale(envs)
+
+env_rda <- rda(scaled.dat)
+Loadings.samp = env_rda$CA$u
+
+envsum = summary(env_rda)
+perc_exp.x.t3 = round(envsum$cont$importance[2,'PC1']* 100)
+perc_exp.y.t3 = round(envsum$cont$importance[2,'PC2']* 100)
+
+
+t3 = data.frame(Loadings.samp, sample_data(ps_wat.t3))
+
+t3.pc = ggplot(t3) + geom_point(aes(x = PC1, y = PC2, size = plant_mass, shape = Treatment)) +
+  scale_shape_manual(values=c(19, 1))+
+  labs(size = 'Plant Material (g)')+
+   theme_classic()  +
+  guides(shape = guide_legend(title.position='top', nrow=1, title.hjust=0.5), size=guide_legend(title.position='top', nrow=1, title.hjust=0.5)) +
+  theme(legend.position='bottom', legend.direction='horizontal') +
+    xlab(paste0("PC1 [",perc_exp.x.t3, "%]" )) + 
+  ylab(paste0("PC2 [",perc_exp.y.t3, "%]" ))+ ggtitle("Day-59")
+
+# day 89
+envs = sample_data(ps_wat.t4)[,c(20, 24,25,26,27, 28, 29, 31, 32)]
+scaled.dat <- scale(envs)
+
+env_rda <- rda(scaled.dat)
+Loadings.samp = env_rda$CA$u
+
+envsum = summary(env_rda)
+perc_exp.x.t4 = round(envsum$cont$importance[2,'PC1']* 100)
+perc_exp.y.t4 = round(envsum$cont$importance[2,'PC2']* 100)
+
+
+t4 = data.frame(Loadings.samp, sample_data(ps_wat.t4))
+
+t4.pc = ggplot(t4) + geom_point(aes(x = PC1, y = PC2, size = plant_mass, shape = Treatment)) +
+  scale_shape_manual(values=c(19, 1))+
+  labs(size = 'Plant Material (g)')+
+   theme_classic()  +
+  guides(shape = guide_legend(title.position='top', nrow=1, title.hjust=0.5), size=guide_legend(title.position='top', nrow=1, title.hjust=0.5)) +
+  theme(legend.position='bottom', legend.direction='horizontal') +
+    xlab(paste0("PC1 [",perc_exp.x.t4, "%]" )) + 
+  ylab(paste0("PC2 [",perc_exp.y.t4, "%]" ))+ ggtitle("Day-89")
+
+pdf("figures/Final/figureS8.pdf", height=9, width=5)
+ggarrange(t1.pc, t3.pc, t4.pc, labels=c('A', 'B', 'C'), ncol=1, common.legend=T)
+dev.off()
+```
+
+# Figure 5a
+```{r}
+# only samples at last two time points grouping together plants (T5 technically) with all T4
+sample_data(ps_asv_rare)$time[sample_data(ps_asv_rare)$time == 'T5'] = 'T4'
+
+final_time = prune_samples(sample_data(ps_asv_rare)$time == 'T4', ps_asv_rare)
+ord <- ordinate(final_time, method = 'PCoA', distance = 'bray')
+df <- cbind(ord$vectors, sample_data(final_time))
+
+all_cols = data.frame(grp = c('water', 'sage', 'willow', 'daphnia', 'mosquito'), col = c("#385DC9", "#BBDB9B", "#179C8E", "#863C6C", "#D57EA3"))
+
+df$sample_type2 = factor(df$sample_type2, levels=c('water', 'sage', 'willow', 'daphnia', 'mosquito'))
+
+# create legend
+col_leg = get_legend(ggplot(df, aes(x = Axis.1, y = Axis.2)) +  
+  geom_point(aes(fill = sample_type2, color = sample_type2, shape=sample_type2) ,alpha=0.9, size=4) +
+scale_color_manual(breaks = all_cols$grp, values=all_cols$col, name='Sample Type') +
+  scale_shape_manual(breaks=all_cols$grp, values=c(15, 16, 16, 17, 17), name='Sample Type') +
+  scale_fill_manual(breaks=all_cols$grp, values=c(15, 16, 16, 17, 17), name='Sample Type') +
+  xlab(paste0("Axis.1  [",round(ord$values[1, 2]*100, 1),"%]")) +
+  ylab(paste0("Axis.2  [",round(ord$values[2, 2]*100, 1),"%]")) + 
+  theme_classic())
+
+treat_leg = get_legend( ggplot(df, aes(x = Axis.1, y = Axis.2)) +  
+  geom_point(aes( shape=Treatment), alpha=0.9, size=4) + 
+    scale_shape_manual(values = c(16, 1)) + theme_classic())
+
+# plot will filled/non-filled for burned and unburned 
+full_ord <- ggplot(df, aes(x = Axis.1, y = Axis.2)) +  
+  geom_point(aes(color = interaction(Treatment,sample_type2), shape=interaction(Treatment,sample_type2)), alpha=0.9, size=4) +
+scale_color_manual(values=c("#385DC9","#385DC9",  "#BBDB9B", "#BBDB9B", "#179C8E","#179C8E" ,"#863C6C",
+                            "#863C6C", "#D57EA3", "#D57EA3"), name='Sample Type') +
+  scale_shape_manual(values=c(15,0,  16,1,  16, 1, 17,2,  17,2), name='Sample Type') +
+  xlab(paste0("Axis.1  [",round(ord$values[1, 2]*100, 1),"%]")) +
+  ylab(paste0("Axis.2  [",round(ord$values[2, 2]*100, 1),"%]")) + 
+  theme_classic() + 
+  theme(legend.position = 'none') 
+
+# complete plot
+full_p1 = full_ord + 
+  annotation_custom(grob = col_leg, xmin=-0.6, xmax=0, ymin=0.1) +
+  annotation_custom(grob = treat_leg, xmin=-0.3, xmax=0, ymin=0.27) 
+```
+
+# Table 2
+```{r}
+aov.all <- adonis2(phyloseq::distance(final_time, method='bray') ~ sample_type1+sample_type2 + Treatment + plant_mass, 
+                   data=data.frame(sample_data(final_time)))
+
+aov.all
+```
+
+## Figure 5C-E (comparisons)
+```{r}
+library(reshape2)
+# calculate asv abundances
+bray_dists <- phyloseq::distance(ps_asv_rare, method = 'bray')
+
+dists <- melt(as.matrix(bray_dists))
+
+long_dists <- left_join(dists, sample_data(ps_asv_rare), by = c('Var1' = 'Sample_Name'))
+long_dists <- left_join(long_dists, sample_data(ps_asv_rare), by = c('Var2' = 'Sample_Name'))
+
+
+# remove replicates actually any duplicates for some reason
+long_dists <- long_dists %>% filter(Var1 != Var2) %>%
+  mutate(reps = ifelse(Var1 > Var2, paste0(Var1,".",Var2), paste0(Var2, ".", Var1))) %>%
+  filter(duplicated(reps))
+
+# edit long_dists object
+long_dists$Comparison <- ifelse(long_dists$sample_type2.x > long_dists$sample_type2.y, 
+                                paste0(long_dists$sample_type2.y, "-", long_dists$sample_type2.x),
+                                paste0(long_dists$sample_type2.x, "-", long_dists$sample_type2.y))
+
+
+plant_cols = c("#BBDB9B","#179C8E")
+plank_cols = c("#863C6C", "#D57EA3")
+
+# Figure 5C
+water.vs.plank <- long_dists %>% 
+  filter(Comparison %in% c('daphnia-water', 'mosquito-water')) %>%
+  filter(plant_mass.x == plant_mass.y) %>%
+  ggplot(aes(x = plant_mass.x, y = 1-value,color=Comparison, fill=Comparison, linetype=Comparison)) + geom_point(aes()) +
+  geom_smooth(se=T, method = 'lm') + xlab('Plant Material (g)') + ylab('Microbial Similarity') +
+  scale_color_manual(values= c('#84D5D2', '#3265EE')) + 
+  scale_fill_manual(values = c('#84D5D2', '#3265EE')) +
+  scale_linetype_manual(values=c('dashed', 'solid')) +
+  theme_classic() +
+  theme(legend.position = c(0.26, 0.82))
+
+
+# add new variable
+long_dists$Comparison1 = long_dists$Comparison
+long_dists$Comparison1[long_dists$Comparison %in% c("daphnia-willow", "daphnia-sage")] = 'daphnia-plant'
+long_dists$Comparison1[long_dists$Comparison %in% c("mosquito-willow", "mosquito-sage")] = 'mosquito-plant'
+
+# Figure 5D
+plant.vs.plank <- long_dists %>% 
+  filter(Comparison1 %in% c('daphnia-plant', 'mosquito-plant')) %>%
+  filter(plant_mass.x == plant_mass.y) %>%
+  ggplot(aes(x = plant_mass.x, y = 1-value,color=Comparison1, fill=Comparison1, linetype=Comparison1)) + geom_point(aes()) +
+  geom_smooth(se=T, method = 'lm') + xlab('Plant Material (g)') + ylab('Microbial Similarity') +
+  scale_color_manual(values= plank_cols, name='Comparison') + 
+  scale_fill_manual(values = plank_cols, name='Comparison') +
+  scale_linetype_manual(values = c('solid', 'dashed'), name='Comparison')+
+  theme_classic() +
+  theme(legend.position = c(0.8, 0.82))
+
+# reorder comparison variable
+long_dists$Comparison[long_dists$Comparison == "water-willow" ] = 'willow-water'
+
+unique(long_dists$Comparison)
+
+# Figure 5D
+plant.vs.water <- long_dists %>% 
+  filter(Comparison %in% c('willow-water', 'sage-water')) %>%
+  filter(plant_mass.x == plant_mass.y) %>%
+  ggplot(aes(x = plant_mass.x, y = 1-value,color=Comparison, fill=Comparison)) + geom_point(aes()) +
+  geom_smooth(se=T, method = 'gam') + xlab('Plant Material (g)') + ylab('Microbial Similarity') +
+  scale_color_manual(values= plant_cols) + 
+  scale_fill_manual(values = plant_cols) +
+  theme_classic() +
+  theme(legend.position = c(0.72, 0.82))
+```
+
+
+# Figure 5B
+## richness
+```{r}
+rich = estimate_richness(ps_asv_rare)
+rich <- cbind(rich, sample_data(ps_asv_rare))
+
+rich$sample_type2 = factor(rich$sample_type2, levels=c('water', 'sage', 'willow','daphnia', 'mosquito'))
+
+grps = rich %>% group_by(sample_type2) %>%
+              dplyr::summarise(h = max(Shannon))
+
+grps$h.new = c(4.3,  5.45, 5.45, 3.2,  4.3)
+
+richness_plot_new = ggplot(rich, aes(x = sample_type2)) + geom_boxplot(aes(y=Shannon), outlier.shape=NA) + geom_point(position='jitter', aes(color = interaction(Treatment,sample_type2), shape=interaction(Treatment,sample_type2), y = Shannon),alpha=0.9, size=2.2) + 
+scale_color_manual(values=c("#385DC9","#385DC9",  "#BBDB9B", "#BBDB9B", "#179C8E","#179C8E" ,"#863C6C",
+                            "#863C6C", "#D57EA3", "#D57EA3"), name='Sample Type') +
+  scale_shape_manual(values=c(15,0,  16,1,  16, 1, 17,2,  17,2), name='Sample Type') +
+  theme_classic() + xlab('Sample Type') +
+  geom_text(data=grps, aes(x=sample_type2, y = h.new, label = c('A', 'B', 'B', 'C', 'A'))) +
+    theme(legend.position='none')
+
+
+kruskal.test(rich$Shannon, rich$sample_type2)
+
+# run wilcoxon rank sum pairwise test for all possible combos
+for(x in unique(rich$sample_type2)) {
+  for(y in unique(rich$sample_type2)){
+    if(y != x ){
+     
+    out = wilcox.test(rich$Shannon[rich$sample_type2==x], rich$Shannon[rich$sample_type2 == y], alternative = "two.sided")
+    if(out$p.value > 0.05) { # print non-significant comparisons
+     print(paste0(x, " vs ", y))
+    # print(out)
+    }
+    }
+  }
+}
+
+```
+# Figure 5 - combined
+```{r}
+## final alternative version with treatments
+p1 = ggarrange(full_p1, richness_plot_new, labels =c('A', 'B'), widths=c(0.65, 0.33), nrow = 1)
+p2 = ggarrange(water.vs.plank, plant.vs.plank, plant.vs.water, nrow=1,ncol=3, labels= c('C', 'D', 'E'))
+
+
+pdf("figures/Final/figure5.pdf", height=10, width=10)
+ggarrange(p1, p2, ncol=1, heights=c(0.6, 0.4))
+dev.off()
+```
+
+
+# EXTRA model comparisons for Fig 5C-E
+```{r}
+library(mgcv)
+
+unique(long_dists$Comparison)
+
+# effect of plant mass on dissimilarity for mosquitos
+mod = lm((1-value) ~   plant_mass.x, data =long_dists %>% 
+  filter(Comparison %in% c('mosquito-willow', 'mosquito-sage')) %>%
+  filter(plant_mass.x == plant_mass.y))
+summary(mod)
+
+# effect of plant mass on dissimilarity for plants
+mod = lm((1-value) ~   plant_mass.x, data =long_dists %>% 
+  filter(Comparison %in% c('sage-water')) %>%
+  filter(plant_mass.x == plant_mass.y))
+summary(mod)
+
+mod = gam((1-value) ~   plant_mass.x, data =long_dists %>% 
+  filter(Comparison %in% c('sage-water')) %>%
+  filter(plant_mass.x == plant_mass.y))
+mod
+summary(mod)
+
+anova.gam(mod)
+
+unique(long_dists$Comparison)
+
+# subset to within comparisons
+wilc = long_dists %>% 
+  filter(plant_mass.x == plant_mass.y) %>%
+  filter(Treatment.x == Treatment.y)
+
+
+# compare burned vs unburned - minor effects of burning for mosquitoes, not for daphnia
+# daphnia-water
+wilcox.test(wilc$value[wilc$Comparison == 'daphnia-water' & wilc$Treatment.x == 'burned'], wilc$value[wilc$Comparison == 'daphnia-water' & wilc$Treatment.x == 'unburned'])
+
+# mosquito water
+wilcox.test(wilc$value[wilc$Comparison == 'mosquito-water' & wilc$Treatment.x == 'burned'], wilc$value[wilc$Comparison == 'mosquito-water' & wilc$Treatment.x == 'unburned'])
+
+# daphnia plant
+wilcox.test(wilc$value[wilc$Comparison1 == 'daphnia-plant' & wilc$Treatment.x == 'burned'], wilc$value[wilc$Comparison1 == 'daphnia-plant' & wilc$Treatment.x == 'unburned'])
+
+# mosquito water
+wilcox.test(wilc$value[wilc$Comparison == 'mosquito-water' & wilc$Treatment.x == 'burned'], wilc$value[wilc$Comparison == 'mosquito-water' & wilc$Treatment.x == 'unburned'])
+```
+
+# Figure 3 - newest version
+```{r}
+library(DESeq2)
+ps_wat.t1 <- prune_samples( sample_data(ps_wat)$time == 'T1', ps_wat)
+
+ord = ordinate(ps_wat.t1, method = 'NMDS', distance = 'bray')
+#plot_ordination(ps_wat, ord, color = 'plant_mass')
+water_df = cbind(ord$points, sample_data(ps_wat.t1))
+
+## genes with ec numbers
+# subset to just water samples and reorder
+bacteria.path_tally_sub = bacteria.path_tally[rownames(bacteria.path_tally) %in% water_df$Sample_Name,]
+bacteria.path_tally_sub = bacteria.path_tally_sub[match(water_df$Sample_Name, rownames(bacteria.path_tally_sub)),]
+
+# check that it worked (should be 0)
+sum(rownames(bacteria.path_tally_sub) != water_df$Sample_Name)
+
+# remove zeros
+bacteria.path_tally_sub = bacteria.path_tally_sub[,(colSums(bacteria.path_tally_sub) != 0)]
+
+met = data.frame(sample_data(ps_wat.t1))
+
+#convert to format for deseq
+cdat = t(bacteria.path_tally_sub)
+cdat = as.matrix(cdat)
+
+met$scaled_plant_mass = scale(met$plant_mass)
+
+dds <- DESeqDataSetFromMatrix(countData=round(cdat), 
+                              colData=met, 
+                              design=~scaled_plant_mass, tidy = FALSE)
+
+dds_out <- DESeq(dds)
+res <- data.frame(results(dds_out))
+res$path = rownames(res)
+
+res1 = res # save as new object - this is for time 1
+
+
+## now calculate at time 4
+ps_wat.t4 <- prune_samples( sample_data(ps_wat)$time == 'T4', ps_wat)
+
+ord = ordinate(ps_wat.t4, method = 'NMDS', distance = 'bray')
+#plot_ordination(ps_wat, ord, color = 'plant_mass')
+water_df = cbind(ord$points, sample_data(ps_wat.t4))
+
+## genes with ec numbers
+# subset to just water samples and reorder
+bacteria.path_tally_sub = bacteria.path_tally[rownames(bacteria.path_tally) %in% water_df$Sample_Name,]
+bacteria.path_tally_sub = bacteria.path_tally_sub[match(water_df$Sample_Name, rownames(bacteria.path_tally_sub)),]
+
+# check that it worked (should be 0)
+sum(rownames(bacteria.path_tally_sub) != water_df$Sample_Name)
+
+# remove zeros
+bacteria.path_tally_sub = bacteria.path_tally_sub[,(colSums(bacteria.path_tally_sub) != 0)]
+
+#sort(standard_devs, decreasing=T)
+
+rownames(bacteria.path_tally_sub)
+met = data.frame(sample_data(ps_wat.t4))
+
+
+#ncol(t(bacteria.ec_tally_sub))
+cdat = t(bacteria.path_tally_sub)
+cdat = as.matrix(cdat)
+
+met$scaled_plant_mass = scale(met$plant_mass)
+
+dds <- DESeqDataSetFromMatrix(countData=round(cdat), 
+                              colData=met, 
+                              design=~scaled_plant_mass, tidy = FALSE)
+
+dds_out <- DESeq(dds)
+res <- data.frame(results(dds_out))
+res$path = rownames(res)
+
+# Now join together T1 and T4 dataframes
+dim(res1 %>% filter(padj < 0.01)) # extract only signif
+dim(res %>% filter(padj < 0.01)) # extract only signif
+res1$time = 'T1'
+res$time = 'T4'
+res1$Time = 'Day-10'; res$Time = 'Day-89'
+
+res.all <- rbind(res1, res)
+
+sign(res.all$log2FoldChange)
+
+table(res.all$path) # how many times does each path appear
+
+# check- sign of log2foldchange is -1 or 1
+# sum of signs is 1 or -1 if only significant on 1 day
+# sum of signs is -2, or 2 if significant with same directionality on both days
+# sum of signs is 0 if significant with opposite directionality on both days
+check = res.all %>%  filter(padj < 0.01 ) %>% filter(abs(log2FoldChange) > 2) %>% dplyr::group_by(path) %>% dplyr::mutate(signs = sum(sign(log2FoldChange))) %>% arrange(signs)
+
+table(check$signs) # note that there are no 0s
+
+# update res.all to include only significant changes
+# if all fo
+res.all <- res.all %>%  filter(padj < 0.01 ) %>% filter(abs(log2FoldChange) > 2) %>% dplyr::group_by(path) %>% dplyr::mutate(signs = sum(sign(log2FoldChange))) %>% 
+  dplyr::mutate(grp = case_when(signs %in% c(1, -1) & time == 'T1' ~ 'T1', # if
+                         signs %in% c(1, -1) & time == 'T4' ~ 'T4',
+                         signs %in% c(2, -2)  ~ 'T1 & T4' ))
+
+unique(res.all$grp) # check
+
+# name for figure formatting
+res.all$grp = factor(res.all$grp, levels = c('T1', 'T4', 'T1 & T4'))
+res.all$grp2[res.all$grp == 'T1'] = 'Day-10'
+res.all$grp2[res.all$grp == 'T4'] = 'Day-89'
+res.all$grp2[res.all$grp == 'T1 & T4'] = 'Days-10 & 89'
+res.all$grp2 = factor(res.all$grp2, levels = c('Day-10', 'Day-89', 'Days-10 & 89'))
+
+
+res.all$grp1 = 'one time point'
+res.all$grp1[res.all$grp == 'T1 & T4'] = 'both time points'
+
+table(res.all$grp2)
+
+res.all %>% filter((padj < 0.01 & abs(log2FoldChange) > 2)) %>% arrange(-log2FoldChange)
+
+# original plot
+res.all.plot = res.all %>% filter((padj < 0.01 & abs(log2FoldChange) > 2)) %>%
+  ggplot(aes(y = reorder(path, log2FoldChange), x = log2FoldChange, color=grp2)) + geom_point() +
+  geom_errorbar(aes(xmin=log2FoldChange-lfcSE, xmax=log2FoldChange+lfcSE), width=.2,
+                 position=position_dodge(.9)) +geom_vline(xintercept = 0, linetype="dashed",
+                size=0.5, color='gray') + ylab('Metabolic Pathways') +
+    scale_color_manual(values = c('#006C67', '#86133B', '#FFB100'), name="significantly\ndifferent at:") + 
+  facet_wrap(.~Time) + theme_bw() + theme(legend.position='none')
+```
+
+# check paths to metabolic pathway mapping for DESEq2
+```{r}
+# now look at which bacteria actually carry these genes
+genome_dat = read.csv("data/genome_data.final.csv") # contains taxa names and GCF accession numbers from paprica
+term.paths = read.csv("data/terminal_paths.csv",row.names=1) # associates GCF numbers with metabolic pathways from paprica
+term.paths[is.na(term.paths)] = 0
+
+length(setdiff(colnames(bacteria.edge_tally), genome_dat$clade)) # how many taxa appear in edge tally but not genome_dat
+length(intersect(term.paths$X, genome_dat$X..assembly_accession)) # no intersections
+length(unique(genome_dat$clade))
+
+# subset genome_dat to contain only relevant subset, and reorder
+genome_dat <- genome_dat %>% filter(clade %in% colnames(bacteria.edge_tally))
+bacteria.edge_tally_sub <- bacteria.edge_tally[,colnames(bacteria.edge_tally) %in% genome_dat$clade]
+genome_dat <- genome_dat[match(colnames(bacteria.edge_tally_sub), genome_dat$clade),]
+
+# subset term.paths to contain only relevant
+term.paths = term.paths[rownames(term.paths) %in% genome_dat$X..assembly_accession,]
+term.paths <- term.paths[match(genome_dat$X..assembly_accession, rownames(term.paths)),]
+term.paths <- term.paths[,colSums(term.paths) != 0]
+sum(rownames(term.paths) != genome_dat$X..assembly_accession) # check
+rownames(term.paths) = genome_dat$clade
+sum(rownames(term.paths) != colnames(bacteria.edge_tally_sub)) # check
+
+# get relevant paths with significant log2foldchange
+path = (res.all %>% filter((padj < 0.01 & abs(log2FoldChange) > 2)) %>% arrange(-log2FoldChange))$path[1]
+
+samps=sample_names(ps_wat.t1)
+
+# empty variable: nyumber of bacteria associated with each pathway
+res.all$num_bact = NA
+
+temp = data.frame(path=character(), phylum = character(), count = numeric() )
+
+# temporary hydrogen production variatble
+hyd = NA
+
+# loop through all pathways to calculate how many bacteria are associated
+for(path in res.all$path) {
+  
+  vec = term.paths[,colnames(term.paths) == path] # vector where 1 indicates that taxa contains pathway
+  mult = t(bacteria.edge_tally_sub)* vec # convert abundance otu table to otu table weighted by pathway presence/absence
+  mult = mult[,colnames(mult) %in% sample_names(ps_wat)] # subset to only water samples
+  
+  # how many bacterial edges does this appear in?
+  # if rowSums(mult) > 0, then pathway appears in at least one sample for that taxa
+  # get list of phyla in which pathway appears
+  phy = gsub("_.*", "", names(rowSums(mult)[rowSums(mult) > 0])) #
+  
+  tot = length(rowSums(mult)[rowSums(mult) > 0]) # total number of taxa that contain pathways
+  
+  # if it's a hydrogen production path, print - just to see
+  #if(grepl("yruvate.fermentati", path)){
+  #  hyd = (names(rowSums(mult)[rowSums(mult) > 0]))
+  #}
+  
+  #if(sum(grepl("yano", (names(rowSums(mult)[rowSums(mult) > 0]))))>0){
+  #  print(path)
+  #  print((names(rowSums(mult)[rowSums(mult) > 0])))
+  #}
+  
+  # if doesn't appear in any taxa, put that in dataframe, else
+  # with the pathway, add the associated phyla, individual abundances of each pathway
+  # divided by total abundance of pathway across the dataset*number of taxa containing pathway
+  if(tot == 0) {
+    tmp = data.frame(path = path, phylum = NA, 
+                   count = 0)
+  } else {
+  tmp = data.frame(path = path, phylum = phy, count = tot)
+                  # count = rowSums(mult)[rowSums(mult) > 0]/sum(rowSums(mult)[rowSums(mult) > 0])*tot)
+  }
+ # num = length(rowSums(mult)[rowSums(mult) > 0])
+  
+ temp = rbind(temp, tmp)
+  
+}
+
+path.order = unique((res.all %>% arrange(log2FoldChange))$path)
+
+temp$time = 'T1 & T4'
+
+# get total number of taxa associated with each pathway
+#counts = temp %>% dplyr::group_by(path) %>% dplyr::summarise(n = sum(count)) - previous version
+counts = temp %>% dplyr::group_by(path) %>% dplyr::summarise(n = mean(count))
+
+
+# look specifically at bacteria associated with hydrogen production, example:
+temp %>% filter(grepl('ydrogen', path))
+```
+
+# Figure 3- final version
+```{r}
+res.all.new <- left_join(res.all, counts) # join with counts
+                     
+sort(res.all.new$n) # look at counts
+
+counts %>% arrange(-n)
+
+# select only pathways that appear in atleast 5 bacteria taax
+res.all.new %>% filter(n > 4) %>% filter((padj < 0.01 & abs(log2FoldChange) > 2)) %>%
+  ggplot(aes(y = reorder(path, log2FoldChange), x = log2FoldChange, color=grp2)) + geom_point() +
+  geom_errorbar(aes(xmin=log2FoldChange-lfcSE, xmax=log2FoldChange+lfcSE), width=.2,
+                 position=position_dodge(.9)) +geom_vline(xintercept = 0, linetype="dashed",
+                size=0.5, color='gray') + ylab('Metabolic Pathways') +
+    scale_color_manual(values = c('#006C67', '#86133B', '#FFB100'), name="significantly\ndifferent on:") + 
+  facet_wrap(.~Time) + theme_bw() 
+
+res.all.new$path
+# Manually rename so that names look nice
+res.all.new$path.new = c("9-decynoate biosynthesis", 
+                         "CDP-diacylglycerol biosynthesis III",
+                         "D-allose degradation",
+                         "D-sorbitol degradation II",
+                         "L-arginine degradation II (AST pathway)",
+                         "L-carnitine.degradation.I",
+                         "L-lysine fermentation to acetate and butanoate",
+                          "NAD/NADP-NADH/NADPH cystolic interconversion (yeast)",
+                         "citronellol.degradation",
+                         "dimethyl.sulfide.biosynthesis.from.methionine",
+                         "fatty acid beta-oxidation III",
+                         "fructoselysine and psicoselysine degradation",
+                         "glycine degradation (reductive Stickland reaction)",
+                         "hydrogen production V",
+                         "linezolid resistance",
+                         'maltose degradation',
+                         "manganese oxidation II",
+                         "muropeptide degradation",
+                         "nitrate reduction IV (dissimilatory)",
+                         "nitrogen fixation II (flavodoxin)",
+                         "protocatechuate.degradation.III..para.cleavage.pathway.",
+                         "pyruvate fermentation to ethanol I",
+                         "pyruvate fermentation to ethanol III",
+                         "tetrathionate reduction I (to thiosulfate)",
+                         "thiosulfate.disproportionation.II..cytochrome.",
+                         "vancomycin resistance II",
+                         "(S)-propane-1,2-diol degradation",
+                         "autoinducer AI-2 degradation",
+                         "even iso-branched-chain fatty acid biosynthesis",
+                         "fatty acid beta-oxidation III",
+                         "glucose and glucose-1-phosphate degradation",
+                         "glutathionylspermidine biosynthesis",
+                         "glycine betaine degradation III",
+                         "limonene.degradation.I..D.limonene.",
+                         "limonene.degradation.II..L.limonene.",
+                         "muropeptide degradation",
+                         "nitrate reduction IV (dissimilatory)",
+                         "nitrogen fixation II (flavodoxin)",
+                         "protocatechuate.degradation.III..para.cleavage.pathway.",
+                         "pyruvate fermentation to ethanol III",
+                         "sulfite oxidation II")
+
+# manually list carbohydrate degrate paths (previously determined- to color new color)
+carb_paths <- c("fructoselysine and psicoselysine degradation", "pyruvate fermentation to ethanol III", "(S)-propane-1,2-diol degradation", "L-lysine fermentation to acetate and butanoate", "D-allose degradation", "muropeptide degradation","glucose and glucose-1-phosphate degradation", "pyruvate fermentation to ethanol I", "D-sorbitol degradation II", "glycine degradation (reductive Stickland reaction)")  # replace with your actual paths
+
+#res.all.new <- res.all.new %>%
+#  mutate(label_color = ifelse(path.new %in% carb_paths, "blue", "black"))
+
+label_cols = c('blue', 'blue', 'black', 'blue', 'black', 'blue', 'black', 'black', 'blue', 'blue',
+               'black', 'blue', 'black', 'black', 'blue', 'blue', 'black','blue',  'black', 'black', 'black','black' )
+
+res.all.new.plot <- res.all.new %>% filter(n > 4) %>% filter((padj < 0.01 & abs(log2FoldChange) > 2)) %>%
+  ggplot(aes(y = reorder(path.new, log2FoldChange), x = log2FoldChange, color=grp2)) + geom_point() +
+  geom_errorbar(aes(xmin=log2FoldChange-lfcSE, xmax=log2FoldChange+lfcSE), width=.2,
+                 position=position_dodge(.9)) +geom_vline(xintercept = 0, linetype="dashed",
+                size=0.5, color='gray') + ylab('Metabolic Pathways') +
+    scale_color_manual(values = c('#006C67', '#86133B', '#FFB100'), name="significantly\ndifferent on:") + 
+  facet_wrap(.~Time) + theme_bw() + 
+  theme(axis.text.y = element_text(color = rev(label_cols)))
+
+
+
+table((res.all.new %>% filter(n >= 4) %>% filter((padj < 0.01 & abs(log2FoldChange) > 2)))$grp2)
+
+# note that colored all red in final plot
+pdf("figures/Final/figure3.pdf", height =6, width = 9)
+res.all.new.plot
+dev.off()
+
+```
+
+#Table S16 - permanova for path abundances
+```{r}
+## genes with ec numbers
+# subset to just water samples and reorder
+bacteria.path_tally_wat = bacteria.path_tally[rownames(bacteria.path_tally) %in% sample_names(ps_pyro_water),]
+bacteria.path_tally_wat = bacteria.path_tally_wat[match(sample_names(ps_pyro_water), rownames(bacteria.path_tally_wat)),]
+
+# check that it worked (should be 0)
+sum(rownames(bacteria.path_tally_wat) != sample_names(ps_pyro_water))
+
+# create distance matrix and run permanova
+# distance matrix and run permanova
+dist_matrix <- vegdist(bacteria.path_tally_wat, method = "bray")
+
+# check that metadata is correct order
+meta = data.frame(sample_data(ps_pyro_water))
+
+sum(is.na(dist_matrix)) # check no missing values
+
+permanova_result <- adonis2(dist_matrix ~ Treatment + plant_mass + time, data = meta, permutations = 999)
+
+# Check results
+print(permanova_result)
+```
+
+
+## Supplemental Figures
+
+# extract genome mean parameters for water samples
+```{r}
+data.bac.new = metadat.new
+```
+
+## functions for plotting time series with models
+```{r}
+pacman::p_load('phyloseq', 'ggplot2', 'readxl', 'vegan', 'knitr', 'lme4', 'lmerTest', 'tidyverse', 'magrittr', 'effects', 'plyr', 'dplyr', 'plotrix', 'car',"gridExtra", "cowplot", "tools", "mgcv", "gratia", "MASS", "stats", "tidymv", "sjstats", "coin", "emmeans")
+
+
+Fig.formatting<-(theme_classic()) +
+  theme(text=element_text(size=10),
+        axis.line=element_blank(),
+        legend.text.align = 0,
+        legend.text=element_text(size=10),
+        #legend.title = element_blank(),
+        panel.border = element_rect(fill=NA, colour = "black", size=1),
+        aspect.ratio=1, 
+        axis.ticks.length=unit(0.25, "cm"),
+        axis.text.y=element_text(
+          margin=unit(c(0.5, 0.5, 0.5, 0.5), "cm"), colour="black", size=10), 
+        axis.text.x=element_text(
+          margin=unit(c(0.5, 0.5, 0.5, 0.5), "cm"), colour="black", size=8)) +
+  theme(legend.key.size = unit(0.4, "cm")) +
+  theme(aspect.ratio=1.3) +
+  theme(panel.spacing=unit(c(0, 0, 0, 0), "cm"))
+
+# make subset of data for water samples
+data.bac.new$Treatment  <- as.factor(data.bac.new$Treatment)
+#colnames(data.bac.new)[c(1, 3, 5, 7, 9, 11, 15)]
+data.bac.water <- data.bac.new %>% filter(sample_type1 == 'water')
+
+# given data frame and response variable, compare three possible models via AIC and return the best model
+# based on lowest AIC scores
+run_gam_mod <- function(df, response_var) {
+  gam.model1 <-gam(response_var ~ Treatment + s(plant_mass, by= Treatment), data = df, method = "REML")
+  gam.model2<-gam(response_var ~  Treatment + s(plant_mass), data = df, method = "REML")
+  gam.model3<-gam(response_var ~  s(plant_mass), data = df, method = "REML")
+  
+  mods <- list(gam.model1, gam.model2, gam.model3) # create list
+  
+  gam_compare.AIC<-AIC(gam.model1, gam.model2, gam.model3)
+  
+  df_out =gam_compare.AIC
+  df_out$delt = ""
+   df_out$delt[which.min(gam_compare.AIC$AIC)] = (min(gam_compare.AIC$AIC) - df_out$AIC[3])
+  
+  df_out$AIC = round(df_out$AIC, digits = 1)
+  df_out$df = round(df_out$df, digits = 1)
+  #View(df_out)
+  
+  return(mods[[which.min(gam_compare.AIC$AIC)]])
+}
+
+# check the model -only if things don't make sense
+check_model <- function(mod.final) {
+  summary(mod.final)
+  anova.gam(mod.final)
+  gam.check(mod.final, rep=1000)
+  draw(mod.final)
+  concrvity(mod.final)
+  par(mfrow = c(2, 2))
+  plot(mod.final, all.terms = TRUE, page=1)
+}
+
+#anova.gam(mod.final)
+#summary(mod.final)
+```
+
+
+## create and extract basic legend for all plots (burned, unburned, global categories)
+```{r}
+# create temporary data frame
+temp <- data.frame(x = c(1, 2, 3), y = c(1, 4, 6), label = factor(c('burned', 'unburned', 'global')))
+
+levels(temp$label) <- temp$label
+
+p <- ggplot(temp, aes(x = x, y = y, color = label, fill=label, linetype=label)) + geom_point(size=1.4)   + geom_smooth(aes(linetype=label), size=0.5, alpha=0.3) +
+  scale_linetype_manual(values = c('solid', 'dotted', 'solid'),name="Treatment") +
+  scale_color_manual(values =c("brown1", "mediumseagreen", "black"),name="Treatment") +
+  scale_fill_manual(values = c("brown1", "mediumseagreen", "black"),name="Treatment") + 
+  theme(legend.title=element_blank()) 
+
+extract.legend <- get_legend(
+  # create some space to the left of the legend
+  p + theme(legend.box.margin = margin(0, 0, 0, 10)))
+```
+
+
+## NUMBER OF CODING SEQUENCES
+```{r}
+T1.water <- subset(data.bac.water, time=='T1') # create subset
+mod.final1 <- run_gam_mod(T1.water, T1.water$ncds.mean )
+
+#mod.final1 # second model (~Treatment + s(plant_mass))
+anova.gam(mod.final1)
+
+check_model(mod.final1)
+# model predictions
+model_preds1<-plot_difference(
+  mod.final1,
+  series = plant_mass,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+model_preds1 # no differences
+#plot for the model output on rawdata
+T1.ncsd.mod.plot<-
+  plot_smooths(
+  model = mod.final1,
+  series = plant_mass,
+  comparison=Treatment
+) + 
+  geom_point(data=T1.water, 
+             aes(x=plant_mass, y=ncds.mean , color=Treatment)) +
+      geom_line(aes(color=Treatment, linetype=Treatment))+
+
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+    scale_fill_manual(values = c("brown1", "mediumseagreen")) +
+  coord_cartesian(ylim=c(2300, 4400)) +
+  ggtitle("Day-10") +
+  ylab("mean number of coding sequences") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+## Time 3
+T3.water <- subset(data.bac.water, time=='T3') # create subset
+mod.final2 <- run_gam_mod(T3.water, T3.water$ncds.mean )
+#mod.final2 # first model (no difference by treatment)
+anova.gam(mod.final2)
+check_model(mod.final2)
+# model predictions
+
+#plot for the model output on rawdata
+T3.ncsd.mod.plot<-
+  plot_smooths(
+  model = mod.final2,
+  series = plant_mass,
+  #comparison=Treatment
+) + 
+  geom_point(data=T3.water, 
+             aes(x=plant_mass, y=ncds.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(2300, 4400)) +
+  ggtitle("Day-59") +
+  ylab("mean number of coding sequences") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+# number of coding sequences T4
+T4.water <- subset(data.bac.water, time=='T4') # create subset
+mod.final3 <- run_gam_mod(T4.water, T4.water$ncds.mean )
+mod.final3 # first model
+anova.gam(mod.final3)
+check_model(mod.final3)
+# model predictions
+
+#plot for the model output on rawdata
+T4.ncsd.mod.plot<-
+  plot_smooths(
+  model = mod.final3,
+  series = plant_mass,
+  #comparison=Treatment
+) + 
+  geom_point(data=T4.water, 
+             aes(x=plant_mass, y=ncds.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(2300, 4400)) +
+  ggtitle("Day-89") +
+  ylab("mean number of coding sequences") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+#extract.legend <- get_legend(
+  # create some space to the left of the legend
+#  T4.ncsd.mod.plot + theme(legend.box.margin = margin(0, 0, 0, 10)))
+
+
+ncds.alltimes<-plot_grid(
+  T1.ncsd.mod.plot+ theme(legend.position = "none"),
+  T3.ncsd.mod.plot+ theme(legend.position = "none"),
+  T4.ncsd.mod.plot+ theme(legend.position = "none"), extract.legend,
+  rel_widths = c(8,8,8,8,8,3), ncol=6)
+ggsave("figures/paprica/ncds.alltimes.mod.pdf", height=4, width=15)
+
+ncds.alltimes
+```
+
+# GENOME PLASTICITY
+```{r}
+T1.water <- subset(data.bac.water, time=='T1') # create subset
+mod.final1 <- run_gam_mod(T1.water, T1.water$phi.mean )
+mod.final1 # first model
+anova.gam(mod.final1)
+check_model(mod.final1)
+# model predictions
+
+#plot for the model output on rawdata
+T1.phi.mod.plot<-
+  plot_smooths(
+  model = mod.final1,
+  series = plant_mass
+ # comparison=Treatment
+) + 
+  geom_point(data=T1.water, 
+             aes(x=plant_mass, y=phi.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0.24, 0.46)) +
+  ggtitle("Day-10") +
+  ylab("genomic plasticity (phi)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+## Time 3
+T3.water <- subset(data.bac.water, time=='T3') # create subset
+mod.final2 <- run_gam_mod(T3.water, T3.water$phi.mean )
+mod.final2 # first model
+anova.gam(mod.final2)
+check_model(mod.final2)
+# model predictions
+
+#plot for the model output on rawdata
+T3.phi.mod.plot<-
+  plot_smooths(
+  model = mod.final2,
+  series = plant_mass,
+  #comparison=Treatment
+) + 
+  geom_point(data=T3.water, 
+             aes(x=plant_mass, y=phi.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0.24, 0.46)) +
+  ggtitle("Day-59") +
+  ylab("genomic plasticity (phi)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+# number of coding sequences T4
+T4.water <- subset(data.bac.water, time=='T4') # create subset
+mod.final3 <- run_gam_mod(T4.water, T4.water$phi.mean )
+mod.final3 # first model
+anova.gam(mod.final3)
+check_model(mod.final3)
+# model predictions
+
+#plot for the model output on rawdata
+T4.phi.mod.plot<-
+  plot_smooths(
+  model = mod.final3,
+  series = plant_mass,
+  #comparison=Treatment
+) + 
+  geom_point(data=T4.water, 
+             aes(x=plant_mass, y=phi.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0.24, 0.46)) +
+  ggtitle("Day-89") +
+  ylab("genomic plasticity (phi)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+#extract.legend <- get_legend(
+  # create some space to the left of the legend
+#  T4.phi.mod.plot + theme(legend.box.margin = margin(0, 0, 0, 10)))
+
+
+phi.alltimes<-plot_grid(
+  T1.phi.mod.plot+ theme(legend.position = "none"),
+  T3.phi.mod.plot+ theme(legend.position = "none"),
+  T4.phi.mod.plot+ theme(legend.position = "none"), extract.legend,
+  rel_widths = c(8,8,8,8,8,3), ncol=6)
+ggsave("figures/paprica/phi.alltimes.mod.pdf", height=4, width=15)
+
+phi.alltimes
+```
+
+Figure 2b. Genome plasticity (quantified using the metric phi) increases significantly across plant mass added at days 10 and 59, but has stabilized across treatment by day 89.
+Phi is a measure of specific genome size relative to average clade genome size.
+
+# GENOME SIZE
+```{r}
+T1.water <- subset(data.bac.water, time=='T1') # create subset
+mod.final1 <- run_gam_mod(T1.water, T1.water$genome_size.mean )
+mod.final1 # second model
+anova.gam(mod.final1)
+check_model(mod.final1)
+# model predictions
+model_preds<-plot_difference(
+  mod.final1,
+  series = plant_mass,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+model_preds 
+#plot for the model output on rawdata
+T1.genomesize.mod.plot<-
+  plot_smooths(
+  model = mod.final1,
+  series = plant_mass,
+ comparison=Treatment
+) + 
+  geom_point(data=T1.water, 
+             aes(x=plant_mass, y=genome_size.mean, color=Treatment)) +
+  geom_line(aes(color=Treatment, linetype=Treatment))+
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(2500000, 5000000)) +
+  ggtitle("Day-10") +
+  ylab("mean genome size (bp)") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+## Time 3
+T3.water <- subset(data.bac.water, time=='T3') # create subset
+mod.final2 <- run_gam_mod(T3.water, T3.water$genome_size.mean )
+mod.final2 # first model
+anova.gam(mod.final2)
+check_model(mod.final2)
+
+#plot for the model output on rawdata
+T3.genomesize.mod.plot<-
+  plot_smooths(
+  model = mod.final2,
+  series = plant_mass,
+  #comparison=Treatment
+) + 
+  geom_point(data=T3.water, 
+             aes(x=plant_mass, y=genome_size.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(2500000, 5000000)) +
+  ggtitle("Day-59") +
+  ylab("mean genome size (bp)") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+# number of coding sequences T4
+T4.water <- subset(data.bac.water, time=='T4') # create subset
+mod.final3 <- run_gam_mod(T4.water, T4.water$genome_size.mean )
+mod.final3 # third model
+anova.gam(mod.final3)
+check_model(mod.final3)
+# model predictions
+model_preds1<-plot_difference(
+  mod.final3,
+  series = plant_mass,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+#pdf("figures/paprica/model_output_genomesize_day89.pdf")
+figS7A = model_preds1 + ggtitle('Day-89') + xlab('Plant Material (g)') + 
+  ylab('genome size (difference smooth)')
+#dev.off()
+#plot for the model output on rawdata
+T4.genomesize.mod.plot<-
+  plot_smooths(
+  model = mod.final3,
+  series = plant_mass,
+  comparison=Treatment
+) + 
+  geom_point(data=T4.water, 
+             aes(x=plant_mass, y=genome_size.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(2500000, 5000000)) +
+  ggtitle("Day-89") +
+  ylab("mean genome size (bp)") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+#extract.legend <- get_legend(
+#  # create some space to the left of the legend
+#  T3.genomesize.mod.plot + theme(legend.box.margin = margin(0, 0, 0, 10)))
+
+
+genome_size.alltimes<-plot_grid(
+  T1.genomesize.mod.plot+ theme(legend.position = "none"),
+  T3.genomesize.mod.plot+ theme(legend.position = "none"),
+  T4.genomesize.mod.plot+ theme(legend.position = "none"), extract.legend,
+  rel_widths = c(8,8,8,8,8,3), ncol=6)
+ggsave("figures/paprica/genome_size.alltimes.mod.pdf", height=4, width=15)
+
+genome_size.alltimes
+```
+Figure S2. Mean genome size per water sample decreases with plant mass added and is larger for unburned treatments at the first time point (parallel to number of coding sequences). Mean genome size stabilizes to a mean at 59 days, and becomes more variable again at 89 days. 
+
+# DOUBLING TIME
+```{r}
+T1.water <- subset(data.bac.water, time=='T1') # create subset
+mod.final1 <- run_gam_mod(T1.water, T1.water$gRodon.d.mean )
+mod.final1 # third model
+anova.gam(mod.final1)
+check_model(mod.final1)
+# model predictions
+model_preds2<-plot_difference(
+  mod.final1,
+  series = plant_mass,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+#pdf("figures/paprica/model_output_doublingtime_day10.pdf")
+figS7B = model_preds + ggtitle('Day-10') + xlab('Plant Material (g)') +
+  ylab('doubling time (difference smooth)')
+#dev.off()
+#plot for the model output on rawdata
+T1.dt.mod.plot<-
+  plot_smooths(
+  model = mod.final1,
+  series = plant_mass,
+  comparison=Treatment
+) + 
+  geom_point(data=T1.water, 
+             aes(x=plant_mass, y=gRodon.d.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(2, 6)) +
+  ggtitle("Day-10") +
+  ylab("mean doubling time (hours)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+## Time 3
+T3.water <- subset(data.bac.water, time=='T3') # create subset
+mod.final2 <- run_gam_mod(T3.water, T3.water$gRodon.d.mean )
+mod.final2 # first model
+anova.gam(mod.final2)
+check_model(mod.final2)
+# model predictions
+
+#plot for the model output on rawdata
+T3.dt.mod.plot<-
+  plot_smooths(
+  model = mod.final2,
+  series = plant_mass,
+  #comparison=Treatment
+) + 
+  geom_point(data=T3.water, 
+             aes(x=plant_mass, y=gRodon.d.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(2, 6)) +
+  ggtitle("Day-59") +
+  ylab("mean doubling time (hours)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+# number of coding sequences T4
+T4.water <- subset(data.bac.water, time=='T4') # create subset
+mod.final3 <- run_gam_mod(T4.water, T4.water$gRodon.d.mean )
+mod.final3 # first model
+anova.gam(mod.final3)
+check_model(mod.final3)
+
+#plot for the model output on rawdata
+T4.dt.mod.plot<-
+  plot_smooths(
+  model = mod.final3,
+  series = plant_mass,
+  #comparison=Treatment
+) + 
+  geom_point(data=T4.water, 
+             aes(x=plant_mass, y=gRodon.d.mean, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(2, 6)) +
+  ggtitle("Day-89") +
+  ylab("mean doubling time (hours)") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+#extract.legend <- get_legend(
+  # create some space to the left of the legend
+#  T3.dt.mod.plot + theme(legend.box.margin = margin(0, 0, 0, 10)))
+
+
+double_time.alltimes<-plot_grid(
+  T1.dt.mod.plot+ theme(legend.position = "none"),
+  T3.dt.mod.plot+ theme(legend.position = "none"),
+  T4.dt.mod.plot+ theme(legend.position = "none"), extract.legend,
+  rel_widths = c(8,8,8,8,8,3), ncol=6)
+ggsave("figures/paprica/doubling_time.alltimes.mod.pdf", height=4, width=15)
+
+double_time.alltimes
+```
+Figure 2c. Mean bacterial doubling time increases from 0-150g of plant material added across both treatment, then decreases/increases variably at day 10. Bacterial doubling time show a net increase across plant mass added at day 59, and stabilizes to a general mean at day 89. 
+
+## Water ALPHA DIVERSITY
+```{r}
+richness <- estimate_richness(ps_asv_rare)
+richness <- cbind(richness, sample_data(ps_asv_rare))
+
+richness$Treatment <- as.factor(richness$Treatment)
+
+richness.water <- subset(richness, sample_type1=='water')
+
+```
+# plot water alpha diversity
+```{r}
+T1.water <- subset(richness.water, time=='T1') # create subset
+mod.final1 <- run_gam_mod(T1.water, T1.water$Shannon )
+mod.final1 # second model
+anova.gam(mod.final1)
+check_model(mod.final1)
+# model predictions
+model_preds<-plot_difference(
+  mod.final1,
+  series = plant_mass,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+model_preds
+#plot for the model output on rawdata
+T1.shan.mod.plot<-
+  plot_smooths(
+  model = mod.final1,
+  series = plant_mass,
+  comparison=Treatment
+) + 
+  geom_point(data=T1.water, 
+             aes(x=plant_mass, y=Shannon, color=Treatment)) +
+  geom_line(aes(color=Treatment, linetype=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(1.8, 4.2)) +
+  ggtitle("Day-10") +
+  ylab("Shannon diversity") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+## Time 3
+T3.water <- subset(richness.water, time=='T3') # create subset
+mod.final2 <- run_gam_mod(T3.water, T3.water$Shannon )
+mod.final2 # third model
+anova.gam(mod.final2)
+check_model(mod.final2)
+# model predictions
+model_preds3<-plot_difference(
+  mod.final2,
+  series = plant_mass,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+##pdf("figures/paprica/model_output_shannon_day59.pdf")
+figS7C <- model_preds3 + ggtitle('Day-59') + xlab('Plant Material (g)') +
+  ylab('shannon diversity (difference smooth)')
+#dev.off()
+#plot for the model output on rawdata
+T3.shan.mod.plot<-
+  plot_smooths(
+  model = mod.final2,
+  series = plant_mass,
+  comparison=Treatment
+) + 
+  geom_point(data=T3.water, 
+             aes(x=plant_mass, y=Shannon, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(1.8, 4.2)) +
+  ggtitle("Day-59") +
+  ylab("Shannon") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+# number of coding sequences T4
+T4.water <- subset(richness.water, time=='T4') # create subset
+mod.final3 <- run_gam_mod(T4.water, T4.water$Shannon )
+mod.final3 # third model
+anova.gam(mod.final3)
+check_model(mod.final3)
+# model predictions
+model_preds4<-plot_difference(
+  mod.final3,
+  series = plant_mass,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+#pdf("figures/paprica/model_output_shannon_day89.pdf")
+figS7D <- model_preds4 + ggtitle('Day-89') + xlab('Plant Material (g)') +
+  ylab('shannon diversity (difference smooth)')
+#dev.off()
+#plot for the model output on rawdata
+T4.shan.mod.plot<-
+  plot_smooths(
+  model = mod.final3,
+  series = plant_mass,
+  comparison=Treatment
+) + 
+  geom_point(data=T4.water, 
+             aes(x=plant_mass, y=Shannon, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(1.8, 4.2)) +
+  ggtitle("Day-89") +
+  ylab("Shannon") +
+  xlab("Plant Material (g)") +
+  Fig.formatting
+
+#extract.legend <- get_legend(
+  # create some space to the left of the legend
+#  T3.shan.mod.plot + theme(legend.box.margin = margin(0, 0, 0, 10)))
+
+
+shannon.alltimes<-plot_grid(
+  T1.shan.mod.plot+ theme(legend.position = "none"),
+  T3.shan.mod.plot+ theme(legend.position = "none"),
+  T4.shan.mod.plot+ theme(legend.position = "none"), extract.legend,
+  rel_widths = c(8,8,8,8,8,3), ncol=6)
+ggsave("figures/paprica/shannon.alltimes.mod.pdf", height=4, width=15)
+
+shannon.alltimes
+
+pdf("figures/Final/figureS7.pdf")
+ggarrange(ggarrange(figS7A, figS7B, labels=c('A', 'B'), nrow=1), ggarrange(figS7C, figS7D, labels=c('C', 'D'),nrow=1), nrow=2)
+dev.off()
+```
+
+# Figure S1a - plant and zoop ordinations
+## PLANT MATERIAL ORDINATION
+## leaf samples
+```{r}
+# all leaf samples
+ps_pyro_leaf <- prune_samples(sample_data(ps_asv_rare)$sample_type1 == 'leaf', ps_asv_rare)
+
+ord <- ordinate(ps_pyro_leaf, method = 'PCoA', distance = 'bray')
+ord_dat <- cbind(ord$vectors, sample_data(ps_pyro_leaf))
+plant_pcoa <- ord_dat %>% mutate(Plant.Material = sample_type2) %>% 
+  mutate(grouped_plant = ifelse(plant_mass <= 50, 'plant mass <= 50g', 'plant mass > 50g')) %>%
+  ggplot(aes(x = Axis.1, y =Axis.2)) +
+  geom_point(aes(color=binned_plant_mass, shape=interaction(sample_type2, Treatment)),size=5,alpha=0.8) + 
+  scale_color_manual(values =  rev(cols1),name="Plant Material (g)", guide='none') +
+  stat_ellipse(aes(linetype=grouped_plant)) + 
+  scale_shape_manual(values = c(15, 16, 0, 1, 5), guide='none') +
+  scale_linetype_manual(values = c('solid', 'dashed'), name="Binned Plant Material", guide='none') +
+  labs(shape = "Plant Species * Treatment") +
+  #ggtitle('PCoA of plant-associated microbiome composition') +
+  xlab(paste0("Axis.1  [",round(ord$values[1, 2]*100, 1),"%]")) +
+  ylab(paste0("Axis.2  [",round(ord$values[2, 2]*100, 1),"%]")) + 
+  theme_bw()
+
+#pdf("figures/Final/figureS1a.pdf", height=5, width=7)
+#plant_pcoa
+#dev.off()
+
+aov.all <- adonis2(phyloseq::distance(ps_pyro_leaf, method='bray') ~ Treatment + plant_mass + sample_type2, 
+                   data=data.frame(sample_data(ps_pyro_leaf)))
+aov.all
+
+```
+
+# Figure S1 - plant and zoop ordinations
+## Figure S1A - ZOOP ordination
+```{r}
+ps_pyro_plank <- prune_samples(sample_data(ps_asv_rare)$sample_type1 == 'plank', ps_asv_rare)
+ps_pyro_plank <- prune_samples(sample_data(ps_pyro_plank)$sample_type2 != 'blank', ps_pyro_plank)
+
+ord <- ordinate(ps_pyro_plank, method = 'PCoA', distance = 'bray')
+
+ord_df <- cbind(ord$vectors, sample_data(ps_pyro_plank))
+plank_pcoa <- ord_df %>% mutate(Plank.Type = sample_type2) %>% ggplot(aes(x = Axis.1, y = Axis.2)) + 
+  geom_point(aes(color = binned_plant_mass, shape=interaction(Plank.Type, Treatment)),size=5) + 
+  scale_color_manual( values = rev(cols1) ,name='Plant Material (g)', guide='none') +
+  scale_shape_manual(values = c(15, 16, 0, 1), guide='none') +
+  stat_ellipse(aes(linetype = Plank.Type), guide='none') +
+  scale_linetype_manual(name='Plankton Type',values=c('dashed', 'solid'), guide='none' )+
+  labs(shape = "Plankton * Treatment") +
+  #ggtitle('PCoA of plankton-associated microbiome composition') +
+  xlab(paste0("Axis.1  [",round(ord$values[1, 2]*100, 1),"%]")) +
+  ylab(paste0("Axis.2  [",round(ord$values[2, 2]*100, 1),"%]")) + 
+  theme_bw()
+
+aov.all <- adonis2(phyloseq::distance(ps_pyro_plank, method='bray') ~ Treatment + plant_mass + sample_type2, 
+                   data=data.frame(sample_data(ps_pyro_plank)))
+print(aov.all)
+
+pdf("figures/Final/figureS1.pdf", height=10, width=7)
+ggarrange(plant_pcoa, plank_pcoa, labels=c('A','B'), ncol=1)
+dev.off()
+```
+
+# plankton microbiome permanova - Table S15
+```{r}
+library(doBy)
+
+zoop = read.csv("data/zooplankton/Pyro_zoop_cleaned.csv")
+
+# make summary dataframe
+z.mean.density<-summaryBy(Density ~ Tank + Date.collected + Time.point + Treatment + plant.mass..g +
+               spp, data = zoop, FUN = mean)
+
+# pivot to columns
+zoop.all<-pivot_wider(z.mean.density, names_from="spp", values_from="Density.mean")
+zoop.all[is.na(zoop.all)]<-0
+
+zoop.all<-as.data.frame(zoop.all)
+cols2<-c("Time.point", "Tank", "Date.collected", "Treatment")
+zoop.all[cols2] <- lapply(zoop.all[cols2], factor) # make all these factors
+
+##Zooplankton Density stacked bar plot**
+##abundance summing to 1.0
+zoop.comm<-subset(z.mean.density, spp=="calanoid"|spp=="cyclopoid"|spp=="nauplii"|
+             spp=="daphnia"|spp=="ceriodaphnia"|spp=="bosmina"|
+             spp=="kellicottia"|spp=="keratella"|spp=="asplanchna"|
+             spp=="chironomid"|spp=="mayfly"|spp=="mosquito")
+
+# set structure
+make.fac<-c("Time.point", "Treatment", "Tank", "spp")
+zoop.comm[make.fac] <- lapply(zoop.comm[make.fac], factor) # make all these factors
+zoop.comm$plant.mass..g<-as.numeric(zoop.comm$plant.mass..g)
+
+# add single column for samples
+zoop.comm$samp = paste(zoop.comm$Time.point, zoop.comm$Date.collected, zoop.comm$Treatment, zoop.comm$plant.mass..g, zoop.comm$Tank, sep = ".")
+
+
+# pivot zoop.comm (subset) widers
+# convert to wide matrix
+# Pivot, ensuring Density is treated correctly and filling NAs with 0 (optional)
+pivot_df <- pivot_wider(
+  zoop.comm[, c("spp", "Density.mean", "samp")], 
+  names_from = spp, 
+  values_from = Density.mean, 
+  values_fill = 0  # Fill NAs with 0 (optional)
+)
+
+pivot_df = data.frame(pivot_df)
+
+# Set row names to 'samp' and remove the 'samp' column from the matrix
+rownames(pivot_df) <- pivot_df$samp
+pivot_df <- pivot_df[, -1]
+
+pivot_df[is.na(pivot_df)] <- 0
+
+
+# convert to relative abundances
+pivot_df <- pivot_df / rowSums(pivot_df)
+rowSums(pivot_df) # check
+
+pivot_df[is.na(pivot_df)] <- 0
+
+
+# distnace matrix and run permanova
+dist_matrix <- vegdist(pivot_df, method = "bray")
+dim(pivot_df)
+
+# check that metadata is correct order
+temp = as.data.frame(rownames(as.matrix(dist_matrix)))
+metadata <- temp %>%
+  separate(`rownames(as.matrix(dist_matrix))`, into = c("Time", "Date", "Treatment", "Mass", "Tank"), sep = "\\.", remove = FALSE)
+
+metadata$plant_mass = as.numeric(metadata$Mass)
+
+sum(is.na(dist_matrix))
+dist_matrix[is.na(dist_matrix)] <- 0
+
+
+permanova_result <- adonis2(dist_matrix ~ Treatment + plant_mass + Time, data = metadata, permutations = 999)
+
+# Check results
+print(permanova_result)
+
+```
+### Flow Cytometry 
+#Flow Cytometry data here is used to determine the abundance of autotrophic (primary producers, photosynthesizers) and heterotrophic (no photopigments) bacterial cells. 
+```{r, FCM}
+fcm.df<-read.csv("data/pyro_fcm_data.csv")
+
+cols<-c("Time.point", "Tank", "Treatment")
+fcm.df[cols] <- lapply(fcm.df[cols], factor) # make all these factors
+```
+
+#Do autofluorescence for autotrophic bacteria
+```{r FCM AF, results='hide', fig.show='hide'}
+### Time 1
+######## T1 model
+m1.AF.T1<-gam(af_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = fcm.df, method = "REML")
+
+m2.AF.T1<-gam(af_sum ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = fcm.df, method = "REML")
+
+m3.AF.T1<-gam(af_sum ~  s(plant.mass..g), subset = Time.point=="T1", data = fcm.df, method = "REML")
+
+T1.AF.AIC<-AIC(m1.AF.T1, m2.AF.T1, m3.AF.T1)
+# best is smoother solo
+
+summary(m3.AF.T1)
+anova.gam(m3.AF.T1)
+gam.check(m3.AF.T1, rep=1000)
+draw(m3.AF.T1)
+concrvity(m3.AF.T1)
+par(mfrow = c(2, 2))
+plot(m3.AF.T1, all.terms = TRUE, page=1)
+
+# model predictions
+AF.diff.T1<-plot_difference(
+  m1.AF.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+AF.T1.mod.plot<-
+  plot_smooths(
+  model = m3.AF.T1,
+  series = plant.mass..g,
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=af_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 4000000)) +
+  ggtitle("Day-10") +
+  ylab("AF sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+### Time 3
+######## T3 model
+m1.AF.T3<-gam(af_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = fcm.df, method = "REML")
+
+m2.AF.T3<-gam(af_sum ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = fcm.df, method = "REML")
+
+m3.AF.T3<-gam(af_sum ~  s(plant.mass..g), subset = Time.point=="T3", data = fcm.df, method = "REML")
+
+T3.AF.AIC<-AIC(m1.AF.T3, m2.AF.T3, m3.AF.T3)
+# best is smoother solo
+
+summary(m3.AF.T3)
+anova.gam(m3.AF.T3)
+gam.check(m3.AF.T3, rep=1000)
+draw(m3.AF.T3)
+concrvity(m3.AF.T3)
+par(mfrow = c(2, 2))
+plot(m3.AF.T3, all.terms = TRUE, page=1)
+
+# model predictions
+AF.diff.T3<-plot_difference(
+  m1.AF.T3,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+AF.T3.mod.plot<-
+  plot_smooths(
+  model = m3.AF.T3,
+  series = plant.mass..g,
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=af_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 4000000)) +
+  ggtitle("Day-59") +
+  ylab("AF sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+### Time 4
+######## T4 model
+m1.AF.T4<-gam(af_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = fcm.df, method = "REML")
+
+m2.AF.T4<-gam(af_sum ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = fcm.df, method = "REML")
+
+m3.AF.T4<-gam(af_sum ~  s(plant.mass..g), subset = Time.point=="T4", data = fcm.df, method = "REML")
+
+T4.AF.AIC<-AIC(m1.AF.T4, m2.AF.T4, m3.AF.T4)
+# best is smoother solo
+
+summary(m1.AF.T4)
+anova.gam(m1.AF.T4)
+gam.check(m1.AF.T4, rep=1000)
+draw(m1.AF.T4)
+concrvity(m1.AF.T4)
+par(mfrow = c(2, 2))
+plot(m1.AF.T4, all.terms = TRUE, page=1)
+
+# model predictions
+AF.diff.T4<-plot_difference(
+  m1.AF.T4,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+AF.T4.mod.plot<-
+  plot_smooths(
+  model = m1.AF.T4,
+  series = plant.mass..g,
+  comparison = Treatment
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=af_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 4000000)) +
+  ggtitle("Day-89") +
+  ylab("AF sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+Now do syber green stained for 'all DNA' getting all bacterial community cells
+```{r fcm sg, results='hide', fig.show='hide'}
+### Time 1
+######## T1 model
+m1.SG.T1<-gam(sg_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = fcm.df, method = "REML")
+
+m2.SG.T1<-gam(sg_sum ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = fcm.df, method = "REML")
+
+m3.SG.T1<-gam(sg_sum ~  s(plant.mass..g), subset = Time.point=="T1", data = fcm.df, method = "REML")
+
+T1.SG.AIC<-AIC(m1.SG.T1, m2.SG.T1, m3.SG.T1)
+# best is smoother solo
+
+summary(m3.SG.T1)
+anova.gam(m3.SG.T1)
+gam.check(m3.SG.T1, rep=1000)
+draw(m3.SG.T1)
+concrvity(m3.SG.T1)
+par(mfrow = c(2, 2))
+plot(m3.SG.T1, all.terms = TRUE, page=1)
+
+# model predictions
+SG.diff.T1<-plot_difference(
+  m1.SG.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+SG.T1.mod.plot<-
+  plot_smooths(
+  model = m3.SG.T1,
+  series = plant.mass..g,
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=sg_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30000000)) +
+  ggtitle("Day-10") +
+  ylab("SG sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############## testing SiZer
+x1 <- fcm.df[(fcm.df$Time.point=="T1"),]
+x <- x1$plant.mass..g
+y <- x1$sg_sum
+
+plot(x,y)
+
+# Calculate the SiZer map for the first derivative
+SiZer.1 <- SiZer(x, y, h=c(50,100), degree=2, derv=2, grid.length=50)
+plot(SiZer.1)
+plot(SiZer.1, ggplot2=TRUE)
+###########
+
+
+
+### Time 3
+######## T3 model
+m1.SG.T3<-gam(sg_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = fcm.df, method = "REML")
+
+m2.SG.T3<-gam(sg_sum ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = fcm.df, method = "REML")
+
+m3.SG.T3<-gam(sg_sum ~  s(plant.mass..g), subset = Time.point=="T3", data = fcm.df, method = "REML")
+
+T3.SG.AIC<-AIC(m1.SG.T3, m2.SG.T3, m3.SG.T3)
+# best is smoother solo
+
+summary(m3.SG.T3)
+anova.gam(m3.SG.T3)
+gam.check(m3.SG.T3, rep=1000)
+draw(m3.SG.T3)
+concrvity(m3.SG.T3)
+par(mfrow = c(2, 2))
+plot(m3.SG.T3, all.terms = TRUE, page=1)
+
+# model predictions
+SG.diff.T3<-plot_difference(
+  m1.SG.T3,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+SG.T3.mod.plot<-
+  plot_smooths(
+  model = m3.SG.T3,
+  series = plant.mass..g,
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=sg_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30000000)) +
+  ggtitle("Day-59") +
+  ylab("SG sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+### Time 4
+######## T4 model
+m1.SG.T4<-gam(sg_sum ~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = fcm.df, method = "REML")
+
+m2.SG.T4<-gam(sg_sum ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = fcm.df, method = "REML")
+
+m3.SG.T4<-gam(sg_sum ~  s(plant.mass..g), subset = Time.point=="T4", data = fcm.df, method = "REML")
+
+T4.SG.AIC<-AIC(m1.SG.T4, m2.SG.T4, m3.SG.T4)
+# best is smoother solo
+
+summary(m1.SG.T4)
+anova.gam(m1.SG.T4)
+gam.check(m1.SG.T4, rep=1000)
+draw(m1.SG.T4)
+concrvity(m1.SG.T4)
+par(mfrow = c(2, 2))
+plot(m1.SG.T4, all.terms = TRUE, page=1)
+
+# model predictions
+SG.diff.T4<-plot_difference(
+  m1.SG.T4,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+SG.T4.mod.plot<-
+  plot_smooths(
+  model = m1.SG.T4,
+  series = plant.mass..g,
+  comparison = Treatment
+) + 
+  geom_point(data=fcm.df[(fcm.df$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=sg_sum, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30000000)) +
+  ggtitle("Day-89") +
+  ylab("SG sum") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+Export model outputs and compile the figures for flow cytometry
+```{r fcm comp figs}
+#######################
+## export model selection parameters
+mod.rep<-rep(c("~Treatment + s(plant.mass..g, by= Treatment)", 
+              "~Treatment + s(plant.mass..g)", 
+              "~s(plant.mass..g)"), times=3)
+
+mod.Fcm.df<- data.frame(mod.rep)
+
+AIC.AF<-bind_rows(T1.AF.AIC, T3.AF.AIC, T4.AF.AIC, T1.SG.AIC, T3.SG.AIC, T4.SG.AIC)
+AIC.Fcm.mod<-cbind(mod.Fcm.df, AIC.AF)
+
+write.csv(AIC.Fcm.mod, "output/AIC models/AIC.Fcm.csv")
+
+#######################
+### make the figure
+
+extract.legend <- get_legend(
+  # create some space to the left of the legend
+  SG.T4.mod.plot + theme(legend.box.margin = margin(0, 0, 0, 10)))
+
+
+FCM.alltimes<-plot_grid(
+  AF.T1.mod.plot+ theme(legend.position = "none"),
+  AF.T3.mod.plot+ theme(legend.position = "none"),
+  AF.T4.mod.plot+ theme(legend.position = "none"), extract.legend,
+  SG.T1.mod.plot+ theme(legend.position = "none"),
+  SG.T3.mod.plot+ theme(legend.position = "none"),
+  SG.T4.mod.plot+ theme(legend.position = "none"), extract.legend,
+  rel_widths = c(8,8,8,3, 8,8,8,3), ncol=4)
+ggsave("figures/Final/figureS2.pdf", height=6, width=9)
+
+#FCM.alltimes
+
+
+
+#### model fits
+FCM.mod.dif<-plot_grid(
+  #AF.diff.T1+ theme(legend.position = "none")+ ggtitle("AF Day-10"),
+  #AF.diff.T3+ theme(legend.position = "none")+ ggtitle("AF-Day-59"),
+  AF.diff.T4+ theme(legend.position = "none")+ ggtitle("AF-Day-89"),
+  #SG.diff.T1+ theme(legend.position = "none")+ ggtitle("SG Day-10"),
+  #SG.diff.T3+ theme(legend.position = "none")+ ggtitle("SG-Day-59"),
+  SG.diff.T4+ theme(legend.position = "none")+ ggtitle("SG-Day-89"),
+  ncol=1)
+#FCM.mod.dif
+ggsave("figures/Final/figureS3.pdf", height=7, width=4)
+```
+
+
+### Zooplankton/Larvae Community. 
+#Counts of zooplankton to get density and community compositions. First, smith-it a bit to cleanup the data and organize for analysis. Models run for T1-T4.  
+```{r zoop wrangle, results='hide', fig.show='hide'}
+
+zoop = read.csv("data/zooplankton/Pyro_zoop_cleaned.csv")
+#############################################
+
+# make summary dataframe
+z.mean.density<-summaryBy(Density ~ Tank + Date.collected + Time.point + Treatment + plant.mass..g +
+               spp, data = zoop, FUN = mean)
+
+# pivot to columns
+zoop.all<-pivot_wider(z.mean.density, names_from="spp", values_from="Density.mean")
+zoop.all[is.na(zoop.all)]<-0
+
+zoop.all<-as.data.frame(zoop.all)
+cols2<-c("Time.point", "Tank", "Date.collected", "Treatment")
+zoop.all[cols2] <- lapply(zoop.all[cols2], factor) # make all these factors
+
+
+```
+
+#### Daphniidae density 
+This is grouped *Daphnia*, as well as lesser abundant taxa *Ceriodaphnia*, *Bosmina*
+```{r, Daphniidae}
+######### Daphniidae
+
+zoop.all$Daphniidae<-zoop.all$daphnia + zoop.all$ceriodaphnia + zoop.all$bosmina
+
+######## T0 model
+m1.daphniid.T0<-gam(Daphniidae~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T0", data = zoop.all, method = "REML")
+
+m2.daphniid.T0<-gam(Daphniidae ~  Treatment + s(plant.mass..g), subset = Time.point=="T0", data = zoop.all, method = "REML")
+
+m3.daphniid.T0<-gam(Daphniidae ~  s(plant.mass..g), subset = Time.point=="T0", data = zoop.all, method = "REML")
+
+T0.daphniid.AIC<-AIC(m1.daphniid.T0, m2.daphniid.T0, m3.daphniid.T0)
+# best is smoother solo
+
+summary(m2.daphniid.T0)
+anova.gam(m2.daphniid.T0)
+gam.check(m2.daphniid.T0, rep=1000)
+draw(m2.daphniid.T0)
+concrvity(m2.daphniid.T0)
+par(mfrow = c(2, 2))
+plot(m2.daphniid.T0, all.terms = TRUE, page=1)
+
+###########  
+#plot for the model output on rawdata
+daphniid.T0.mod.plot<-
+  plot_smooths(
+  model = m3.daphniid.T0,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T0"),], 
+             aes(x=plant.mass..g, y=Daphniidae, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 60)) +
+  ggtitle("Day-0") +
+  ylab("Daphniidae density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+######## T1 model
+m1.daphniid.T1<-gam(Daphniidae~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m2.daphniid.T1<-gam(Daphniidae ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m3.daphniid.T1<-gam(Daphniidae ~  s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+T1.daphniid.AIC<-AIC(m1.daphniid.T1, m2.daphniid.T1, m3.daphniid.T1)
+# best is smoother solo
+
+summary(m3.daphniid.T1)
+anova.gam(m3.daphniid.T1)
+gam.check(m3.daphniid.T1, rep=1000)
+draw(m3.daphniid.T1)
+concrvity(m3.daphniid.T1)
+par(mfrow = c(2, 2))
+plot(m3.daphniid.T1, all.terms = TRUE, page=1)
+
+###########  
+#plot for the model output on rawdata
+daphniid.T1.mod.plot<-
+  plot_smooths(
+  model = m3.daphniid.T1,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=Daphniidae, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 60)) +
+  ggtitle("Day-10") +
+  ylab("Daphniidae density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T2 model
+m1.daphniid.T2<-gam(Daphniidae~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m2.daphniid.T2<-gam(Daphniidae ~  Treatment + s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m3.daphniid.T2<-gam(Daphniidae ~  s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+T2.daphniid.AIC<-AIC(m1.daphniid.T2, m2.daphniid.T2, m3.daphniid.T2)
+# best is smoother solo
+
+summary(m3.daphniid.T2)
+anova.gam(m3.daphniid.T2)
+gam.check(m3.daphniid.T2, rep=1000)
+draw(m3.daphniid.T2)
+concrvity(m3.daphniid.T2)
+par(mfrow = c(2, 2))
+plot(m3.daphniid.T2, all.terms = TRUE, page=1)
+
+
+###########  
+#plot for the model output on rawdata
+daphniid.T2.mod.plot<-
+  plot_smooths(
+  model = m3.daphniid.T2,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=Daphniidae, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 60)) +
+  ggtitle("Day-31") +
+  ylab("Daphniidae density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T3 model
+m1.daphniid.T3<-gam(Daphniidae~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m2.daphniid.T3<-gam(Daphniidae ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m3.daphniid.T3<-gam(Daphniidae ~  s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+T3.daphniid.AIC<-AIC(m1.daphniid.T3, m2.daphniid.T3, m3.daphniid.T3)
+# best is smoother solo
+
+summary(m1.daphniid.T3)
+anova.gam(m1.daphniid.T3)
+gam.check(m1.daphniid.T3, rep=1000)
+draw(m1.daphniid.T3)
+concrvity(m1.daphniid.T3)
+par(mfrow = c(2, 2))
+plot(m1.daphniid.T3, all.terms = TRUE, page=1)
+
+
+# model predictions
+daphniid.diff.T3<-plot_difference(
+  m1.daphniid.T3,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+daphniid.diff.T3 + ggtitle("Day-59 Daphniidae")
+ggsave("figures/Final/figureS10_Daphniid.moddiff.T3.pdf", height=4, width=4)
+
+
+###########  
+#plot for the model output on rawdata
+daphniid.T3.mod.plot<-
+  plot_smooths(
+  model = m1.daphniid.T3,
+  series = plant.mass..g,
+  comparison=Treatment,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=Daphniidae, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 60)) +
+  ggtitle("Day-59") +
+  ylab("Daphniidae density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############################
+######## T4 model
+m1.daphniid.T4<-gam(Daphniidae~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m2.daphniid.T4<-gam(Daphniidae ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m3.daphniid.T4<-gam(Daphniidae ~  s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+T4.daphniid.AIC<-AIC(m1.daphniid.T4, m2.daphniid.T4, m3.daphniid.T4)
+# best is smoother solo
+
+summary(m3.daphniid.T4)
+anova.gam(m3.daphniid.T4)
+gam.check(m3.daphniid.T4, rep=1000)
+draw(m3.daphniid.T4)
+concrvity(m3.daphniid.T4)
+par(mfrow = c(2, 2))
+plot(m3.daphniid.T4, all.terms = TRUE, page=1)
+
+
+
+###########  
+#plot for the model output on rawdata
+daphniid.T4.mod.plot<-
+  plot_smooths(
+  model = m3.daphniid.T4,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=Daphniidae, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 60)) +
+  ggtitle("Day-89") +
+  ylab("Daphniidae density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+#### Copepoda 
+*Copepods grouped* = calanoids, cyclopoids, nauplii
+```{r, Copepods}
+######### Copepods
+
+zoop.all$Copepods<-zoop.all$calanoid + zoop.all$cyclopoid + zoop.all$nauplii
+
+
+######## T0 model
+m1.Copep.T0<-gam(Copepods~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T0", data = zoop.all, method = "REML")
+
+m2.Copep.T0<-gam(Copepods ~  Treatment + s(plant.mass..g), subset = Time.point=="T0", data = zoop.all, method = "REML")
+
+m3.Copep.T0<-gam(Copepods ~  s(plant.mass..g), subset = Time.point=="T0", data = zoop.all, method = "REML")
+
+T0.Copep.AIC<-AIC(m1.Copep.T0, m2.Copep.T0, m3.Copep.T0)
+# best is separate smoother
+
+summary(m1.Copep.T0)
+anova.gam(m1.Copep.T0)
+gam.check(m1.Copep.T0, rep=1000)
+draw(m1.Copep.T0)
+concrvity(m1.Copep.T0)
+par(mfrow = c(2, 2))
+plot(m1.Copep.T0, all.terms = TRUE, page=1)
+
+###########  
+#plot for the model output on rawdata
+Copep.T0.mod.plot<-
+  plot_smooths(
+  model = m1.Copep.T0,
+  series = plant.mass..g,
+  comparison=Treatment,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T0"),], 
+             aes(x=plant.mass..g, y=Copepods, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30)) +
+  ggtitle("Day-0") +
+  ylab("Copepod density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+######## T1 model
+m1.Copep.T1<-gam(Copepods~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m2.Copep.T1<-gam(Copepods ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m3.Copep.T1<-gam(Copepods ~  s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+T1.Copep.AIC<-AIC(m1.Copep.T1, m2.Copep.T1, m3.Copep.T1)
+# best is smoother solo
+
+summary(m3.Copep.T1)
+anova.gam(m3.Copep.T1)
+gam.check(m3.Copep.T1, rep=1000)
+draw(m3.Copep.T1)
+concrvity(m3.Copep.T1)
+par(mfrow = c(2, 2))
+plot(m3.Copep.T1, all.terms = TRUE, page=1)
+
+###########  
+#plot for the model output on rawdata
+Copep.T1.mod.plot<-
+  plot_smooths(
+  model = m3.Copep.T1,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=Copepods, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30)) +
+  ggtitle("Day-10") +
+  ylab("Copepods density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T2 model
+m1.Copep.T2<-gam(Copepods~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m2.Copep.T2<-gam(Copepods ~  Treatment + s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m3.Copep.T2<-gam(Copepods ~  s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+T2.Copep.AIC<-AIC(m1.Copep.T2, m2.Copep.T2, m3.Copep.T2)
+# best is smoother solo
+
+summary(m1.Copep.T2)
+anova.gam(m1.Copep.T2)
+gam.check(m1.Copep.T2, rep=1000)
+draw(m1.Copep.T2)
+concrvity(m1.Copep.T2)
+par(mfrow = c(2, 2))
+plot(m1.Copep.T2, all.terms = TRUE, page=1)
+
+
+# model predictions
+Copep.diff.T2<-plot_difference(
+  m1.Copep.T2,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+# save model diff here,  it matters
+Copep.diff.T2 + ggtitle("Day-31 Copepods")
+ggsave("figures/Final/figureS10_Copep.moddiff.T2.pdf", height=4, width=4)
+
+###########  
+#plot for the model output on rawdata
+Copep.T2.mod.plot<-
+  plot_smooths(
+  model = m1.Copep.T2,
+  series = plant.mass..g,
+  comparison=Treatment,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=Copepods, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30)) +
+  ggtitle("Day-31") +
+  ylab("Copepods density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############################
+######## T3 model
+m1.Copep.T3<-gam(Copepods~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m2.Copep.T3<-gam(Copepods ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m3.Copep.T3<-gam(Copepods ~  s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+T3.Copep.AIC<-AIC(m1.Copep.T3, m2.Copep.T3, m3.Copep.T3)
+# best is smoother solo
+
+summary(m3.Copep.T3)
+anova.gam(m3.Copep.T3)
+gam.check(m3.Copep.T3, rep=1000)
+draw(m3.Copep.T3)
+concrvity(m3.Copep.T3)
+par(mfrow = c(2, 2))
+plot(m3.Copep.T3, all.terms = TRUE, page=1)
+
+
+###########  
+#plot for the model output on rawdata
+Copep.T3.mod.plot<-
+  plot_smooths(
+  model = m3.Copep.T3,
+  series = plant.mass..g
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=Copepods, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30)) +
+  ggtitle("Day-59") +
+  ylab("Copepods density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############################
+######## T4 model
+m1.Copep.T4<-gam(Copepods~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m2.Copep.T4<-gam(Copepods ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m3.Copep.T4<-gam(Copepods ~  s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+T4.Copep.AIC<-AIC(m1.Copep.T4, m2.Copep.T4, m3.Copep.T4)
+# best is smoother solo
+
+summary(m3.Copep.T4)
+anova.gam(m3.Copep.T4)
+gam.check(m3.Copep.T4, rep=1000)
+draw(m3.Copep.T4)
+concrvity(m3.Copep.T4)
+par(mfrow = c(2, 2))
+plot(m3.Copep.T4, all.terms = TRUE, page=1)
+
+
+###########  
+#plot for the model output on rawdata
+Copep.T4.mod.plot<-
+  plot_smooths(
+  model = m3.Copep.T4,
+  series = plant.mass..g,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=Copepods, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 30)) +
+  ggtitle("Day-89") +
+  ylab("Copepods density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+#### Mosquito density 
+This is all *Mosquito larvae and pupae*
+```{r mosquito model plots, results='hide', fig.show='hide'}
+
+######## T1 model
+m1.mos.T1<-gam(mosquito~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m2.mos.T1<-gam(mosquito ~  Treatment + s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+m3.mos.T1<-gam(mosquito ~  s(plant.mass..g), subset = Time.point=="T1", data = zoop.all, method = "REML")
+
+T1.mos.AIC<-AIC(m1.mos.T1, m2.mos.T1, m3.mos.T1)
+# best is smoother solo
+
+summary(m1.mos.T1)
+anova.gam(m1.mos.T1)
+gam.check(m1.mos.T1, rep=1000)
+draw(m1.mos.T1)
+concrvity(m1.mos.T1)
+par(mfrow = c(2, 2))
+plot(m1.mos.T1, all.terms = TRUE, page=1)
+
+
+# model predictions
+mos.diff.T1<-plot_difference(
+  m1.mos.T1,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+mos.T1.mod.plot<-
+  plot_smooths(
+  model = m1.mos.T1,
+  series = plant.mass..g,
+  comparison=Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=mosquito, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  ggtitle("Day-10") +
+  ylab("Mosquito density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T2 model
+m1.mos.T2<-gam(mosquito~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m2.mos.T2<-gam(mosquito ~  Treatment + s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+m3.mos.T2<-gam(mosquito ~  s(plant.mass..g), subset = Time.point=="T2", data = zoop.all, method = "REML")
+
+T2.mos.AIC<-AIC(m1.mos.T2, m2.mos.T2, m3.mos.T2)
+# best is smoother solo
+
+summary(m1.mos.T2)
+anova.gam(m1.mos.T2)
+gam.check(m1.mos.T2, rep=1000)
+draw(m1.mos.T2)
+concrvity(m1.mos.T2)
+par(mfrow = c(2, 2))
+plot(m1.mos.T2, all.terms = TRUE, page=1)
+
+# model predictions
+mos.diff.T2<-plot_difference(
+  m1.mos.T2,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+mos.T2.mod.plot<-
+  plot_smooths(
+  model = m1.mos.T2,
+  series = plant.mass..g,
+  comparison= Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=mosquito, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  ggtitle("Day-31") +
+  ylab("Mosquito density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+
+############################
+######## T3 model
+m1.mos.T3<-gam(mosquito~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m2.mos.T3<-gam(mosquito ~  Treatment + s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+m3.mos.T3<-gam(mosquito ~  s(plant.mass..g), subset = Time.point=="T3", data = zoop.all, method = "REML")
+
+T3.mos.AIC<-AIC(m1.mos.T3, m2.mos.T3, m3.mos.T3)
+# best is smoother solo
+
+summary(m1.mos.T3)
+anova.gam(m1.mos.T3)
+gam.check(m1.mos.T3, rep=1000)
+draw(m1.mos.T3)
+concrvity(m1.mos.T3)
+par(mfrow = c(2, 2))
+plot(m1.mos.T3, all.terms = TRUE, page=1)
+
+
+# model predictions
+mos.diff.T3<-plot_difference(
+  m1.mos.T3,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+mos.T3.mod.plot<-
+  plot_smooths(
+  model = m1.mos.T3,
+  series = plant.mass..g,
+  comparison=Treatment,
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=mosquito, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  ggtitle("Day-59") +
+  ylab("Mosquito density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+
+############################
+######## T4 model
+m1.mos.T4<-gam(mosquito~ Treatment + s(plant.mass..g, by= Treatment), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m2.mos.T4<-gam(mosquito ~  Treatment + s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+m3.mos.T4<-gam(mosquito ~  s(plant.mass..g), subset = Time.point=="T4", data = zoop.all, method = "REML")
+
+T4.mos.AIC<-AIC(m1.mos.T4, m2.mos.T4, m3.mos.T4)
+# best is smoother solo
+
+summary(m1.mos.T4)
+anova.gam(m1.mos.T4)
+gam.check(m1.mos.T4, rep=1000)
+draw(m1.mos.T4)
+concrvity(m1.mos.T4)
+par(mfrow = c(2, 2))
+plot(m1.mos.T4, all.terms = TRUE, page=1)
+
+
+# model predictions
+mos.diff.T4<-plot_difference(
+  m1.mos.T4,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+
+###########  
+#plot for the model output on rawdata
+mos.T4.mod.plot<-
+  plot_smooths(
+  model = m1.mos.T4,
+  series = plant.mass..g,
+  comparison= Treatment
+) + 
+  geom_point(data=zoop.all[(zoop.all$Time.point=="T4"),], 
+             aes(x=plant.mass..g, y=mosquito, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  ggtitle("Day-89") +
+  ylab("Mosquito density (#/L)") +
+  xlab("plant material (g)") +
+  Fig.formatting
+
+```
+
+* compile outputs from models
+* Compiled and single species density plots 
+* models for T0 (not vital) and the 4 sampling points: T1-T4  
+```{r compiled model outputs, results='hide'}
+################
+
+## export model selection parameters
+mod.rep<-rep(c("~Treatment + s(plant.mass..g, by= Treatment)", 
+              "~Treatment + s(plant.mass..g)", 
+              "~s(plant.mass..g)"), times=12)
+
+mod.zoop.df<- data.frame(mod.rep)
+
+AIC.AF<-bind_rows(T1.daphniid.AIC, T2.daphniid.AIC, T3.daphniid.AIC, T4.daphniid.AIC, 
+                  T1.Copep.AIC, T2.Copep.AIC, T3.Copep.AIC, T4.Copep.AIC,
+                  T1.mos.AIC, T2.mos.AIC, T3.mos.AIC, T4.mos.AIC)
+AIC.Zoop.mod<-cbind(mod.zoop.df, AIC.AF)
+
+write.csv(AIC.Zoop.mod, "output/AIC.Zoops.csv")
+```
+
+```{r compiled plots 3 groups}
+### just Daphniidae
+Daphniidae.plots<-plot_grid(
+  daphniid.T1.mod.plot+ theme(legend.position = "none"),
+  daphniid.T2.mod.plot+ theme(legend.position = "none"),
+  daphniid.T3.mod.plot+ theme(legend.position = "none"),
+  daphniid.T4.mod.plot+ theme(legend.position = "none"),
+  extract.legend,
+  rel_widths = c(8,8,8,8,3), ncol=5, 
+  labels=c('A', 'B', 'C', 'D', ''), label_size=10)
+
+
+### just Copepods
+Copepod.plots<-plot_grid(
+  Copep.T1.mod.plot+ theme(legend.position = "none"),
+  Copep.T2.mod.plot+ theme(legend.position = "none"),
+  Copep.T3.mod.plot+ theme(legend.position = "none"),
+  Copep.T4.mod.plot+ theme(legend.position = "none"),
+  extract.legend,
+  rel_widths = c(8,8,8,8,3), ncol=5, 
+  labels=c('A', 'B', 'C', 'D', ''), label_size=10)
+
+
+#################################### Model plots for mosquitos
+######### Mosquito model plots
+Mos.plot.dids<-plot_grid(
+ mos.diff.T1 + ggtitle("Mosquito Day-10"),
+ mos.diff.T2 + ggtitle("Day-31"),
+ mos.diff.T3 + ggtitle("Day-59"), 
+ mos.diff.T4 + ggtitle("Day-89"),
+ rel_widths = c(8,8,8,8), ncol=4)
+ggsave("figures/Final/figureS10_Mos.mod.diff.pdf", height=3, width=11)
+  
+
+#################################### Compiled
+### compile the Daph and Copepods, Mosquitos
+Daph.Cop.Mos<-plot_grid(
+  daphniid.T1.mod.plot+ theme(legend.position = "none") + ggtitle("Daphniidae- Day 10"),
+  daphniid.T2.mod.plot+ theme(legend.position = "none"),
+  daphniid.T3.mod.plot+ theme(legend.position = "none"),
+  daphniid.T4.mod.plot+ theme(legend.position = "none"), extract.legend,
+  
+  Copep.T1.mod.plot+ theme(legend.position = "none") + ggtitle("Copepoda- Day 10"),
+  Copep.T2.mod.plot+ theme(legend.position = "none"),
+  Copep.T3.mod.plot+ theme(legend.position = "none"),
+  Copep.T4.mod.plot+ theme(legend.position = "none"),
+  extract.legend,
+  
+  mos.T1.mod.plot+ theme(legend.position = "none") + ggtitle("Mosquito- Day 10"),
+  mos.T2.mod.plot+ theme(legend.position = "none"),
+  mos.T3.mod.plot+ theme(legend.position = "none"),
+  mos.T4.mod.plot+ theme(legend.position = "none"), extract.legend,
+  
+  rel_widths = c(8,8,8,8,3, 8,8,8,8,3,8,8,8,8,3), ncol=5, 
+  labels=c('A', '', '', '', '',
+           'B', '', '', '', '',
+           'C', '', '', '', ''), label_size=10)
+ggsave("figures/Final/figureS9.pdf", height=12, width=12)
+```
+
+
+**Zooplankton Density stacked bar plot**
+* abundance summing to 1.0
+```{r, density stacked bar abundance}
+zoop.comm<-subset(z.mean.density, spp=="calanoid"|spp=="cyclopoid"|spp=="nauplii"|
+             spp=="daphnia"|spp=="ceriodaphnia"|spp=="bosmina"|
+             spp=="kellicottia"|spp=="keratella"|spp=="asplanchna"|
+             spp=="chironomid"|spp=="mayfly"|spp=="mosquito")
+
+# set structure
+make.fac<-c("Time.point", "Treatment", "Tank", "spp")
+zoop.comm[make.fac] <- lapply(zoop.comm[make.fac], factor) # make all these factors
+zoop.comm$plant.mass..g<-as.numeric(zoop.comm$plant.mass..g)
+
+library('dplyr')
+
+zoop.comm$spp.bin<-dplyr::recode(zoop.comm$spp, 
+                         ceriodaphnia = "Daphniidae",
+                         daphnia = "Daphniidae",
+                         bosmina = "Daphniidae",
+                           
+                         calanoid = 'Copepoda', 
+                         cyclopoid = 'Copepoda',
+                         nauplii= 'Copepoda',
+                               
+                         chironomid = 'Insecta',
+                         mayfly= "Insecta",
+                         mosquito = 'Culex spp.',
+                        
+                         kellicottia = 'Rotifera',
+                         keratella= 'Rotifera',
+                         asplanchna= "Rotifera")
+
+zoop.comm$spp.bin<-factor(zoop.comm$spp.bin, levels=c("Copepoda", "Daphniidae", "Rotifera", "Insecta", "Culex spp."))
+
+zoop.comm$Days<-dplyr::recode(zoop.comm$Time.point, 
+                         T0 = "Day-0",
+                         T1=  "Day-10",
+                         T2 = "Day-31",
+                         T3 = "Day-59",
+                         T4 = 'Day-89')
+
+z.binmean.density<-summaryBy(Density.mean ~ Days + Tank + Treatment + plant.mass..g +
+               spp.bin, data = zoop.comm, FUN = mean)
+# rename
+z.binmean.density<- z.binmean.density %>% dplyr::rename("Density.mean" = "Density.mean.mean")
+
+# colors
+bar.color<-c("orchid", "lightskyblue3", "darkseagreen3", "gold2", "coral")
+
+### make plant material as a factor to reduce white space in bars
+z.binmean.density2<-z.binmean.density
+z.binmean.density2$plant.mass..g<-as.factor(z.binmean.density2$plant.mass..g)
+
+abundance.density.plot.bin.fac<-ggplot(z.binmean.density2, aes(fill=spp.bin, y=Density.mean, x=plant.mass..g)) +
+  scale_fill_manual(values=bar.color, name = "Zoops & Inverts")+
+  geom_bar(stat="identity", position="fill")+
+  xlab("mean") +
+  ylab("Community Proportion") +
+  facet_grid(rows=vars(Days), cols=vars(Treatment))+
+  labs(x = "plant material (g)") + theme_bw() +
+  theme(axis.text.x = element_text(size=8, angle = 90, hjust = 1))
+
+abundance.density.plot.bin.fac
+ggsave("figures/Final/figureS6_old.pdf", height=8, width=7)
+
+```
+
+### Greenhouse Gas Isotopes
+```{r load GHGs}
+GHG<-read.csv("data/Pyro_ghg_d13C.csv")
+GHG<-na.omit(GHG) # remove NAs
+
+# set structure
+make.fac<-c("Time.point", "Treatment", "Tank", "Gas")
+GHG[make.fac] <- lapply(GHG[make.fac], factor) # make all these factors
+GHG$plant.mass..g<-as.numeric(GHG$plant.mass..g)
+
+# rename
+GHG<- GHG %>% dplyr::rename("GHG.nM" = "GHGwater..nmol.GHG..L.H2O")
+
+# reorder columns and export
+GHG<- GHG %>% dplyr::select(Time.point, Treatment, plant.mass..g, Tank, Gas, GHG.nM, d13C)
+
+#############################################
+
+```
+
+### GHG isotopes
+What does CO2-d13C look like?
+```{r CO2 model plots}
+############# GHG plots and models
+#### CO2
+CO2<-GHG[(GHG$Gas=="CO2"),]
+
+amb.CO2<-(-11.14 + -10.92 + -11.45 + -11.35)/4
+
+
+#######-- T0
+
+m1.T0.CO2.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g, by=Treatment), subset = Time.point=="T0", data = CO2,
+            method="REML", family="gaussian")
+
+m2.T0.CO2.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g), subset = Time.point=="T0", data = CO2,
+            method="REML", family="gaussian")
+
+m3.T0.CO2.d13C<- gam(d13C ~
+            s(plant.mass..g), subset = Time.point=="T0", data = CO2,
+            method="REML", family="gaussian")
+
+CO2.d13C.T0.AIC<-AIC(m1.T0.CO2.d13C, m2.T0.CO2.d13C, m3.T0.CO2.d13C)
+#factor and global smooth best
+
+summary(m2.T0.CO2.d13C)
+anova.gam(m2.T0.CO2.d13C)
+gam.check(m2.T0.CO2.d13C, rep=1000)
+draw(m2.T0.CO2.d13C)
+concrvity(m2.T0.CO2.d13C)
+par(mfrow = c(1, 2))
+plot(m2.T0.CO2.d13C, all.terms = TRUE, page=1)
+
+# model predictions
+CO2.d13C.diff.T0<-plot_difference(
+  m1.T0.CO2.d13C,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+CO2.d13C.T0.mod.plot<-
+  plot_smooths(
+  model = m2.T0.CO2.d13C,
+  series = plant.mass..g,
+  comparison = Treatment
+)  + theme(legend.position = "none") +
+  geom_point(data=CO2[(CO2$Time.point=="T0"),], 
+             aes(x=plant.mass..g, y=d13C, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) +
+  geom_hline(yintercept=amb.CO2, linetype="dashed", color = "gray60")+
+  ylab(expression(paste(delta^{13}, CO[2], " (\u2030, air)"))) +
+  xlab("plant material (g)") +
+  ggtitle("Time-0") +
+  coord_cartesian(ylim=c(-30, 0)) +
+  Fig.formatting +
+  theme(legend.key.size = unit(1,"line"))
+
+CO2.d13C.T0.mod.plot
+
+#### CO2 
+#######-- T1
+
+m1.T1.CO2.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g, by=Treatment), subset = Time.point=="T1", data = CO2,
+            method="REML", family="gaussian")
+
+m2.T1.CO2.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g), subset = Time.point=="T1", data = CO2,
+            method="REML", family="gaussian")
+
+m3.T1.CO2.d13C<- gam(d13C ~
+            s(plant.mass..g), subset = Time.point=="T1", data = CO2,
+            method="REML", family="gaussian")
+
+CO2.d13C.T1.AIC<-AIC(m1.T1.CO2.d13C, m2.T1.CO2.d13C, m3.T1.CO2.d13C)
+#global smooth best
+
+summary(m3.T1.CO2.d13C)
+anova.gam(m3.T1.CO2.d13C)
+gam.check(m3.T1.CO2.d13C, rep=1000)
+draw(m3.T1.CO2.d13C)
+concrvity(m3.T1.CO2.d13C)
+par(mfrow = c(1, 2))
+plot(m3.T1.CO2.d13C, all.terms = TRUE, page=1)
+
+# model predictions
+CO2.d13C.diff.T1<-plot_difference(
+  m1.T1.CO2.d13C,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+CO2.d13C.T1.mod.plot<-
+  plot_smooths(
+  model = m3.T1.CO2.d13C,
+  series = plant.mass..g,
+)  + theme(legend.position = "none") +
+  geom_point(data=CO2[(CO2$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=d13C, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) +
+  ylab(expression(paste(delta^{13}, CO[2], " (\u2030, air)"))) +
+  geom_hline(yintercept=amb.CO2, linetype="dashed", color = "gray60")+
+  xlab("plant material (g)") +
+  ggtitle("Time-1") +
+  coord_cartesian(ylim=c(-30, 0)) +
+  Fig.formatting +
+  theme(legend.key.size = unit(1,"line"))
+
+CO2.d13C.T1.mod.plot
+
+#### CO2
+#######-- T2
+
+
+m1.T2.CO2.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g, by=Treatment), subset = Time.point=="T2", data = CO2,
+            method="REML", family="gaussian")
+
+m2.T2.CO2.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g), subset = Time.point=="T2", data = CO2,
+            method="REML", family="gaussian")
+
+m3.T2.CO2.d13C<- gam(d13C ~
+            s(plant.mass..g), subset = Time.point=="T2", data = CO2,
+            method="REML", family="gaussian")
+
+CO2.d13C.T2.AIC<-AIC(m1.T2.CO2.d13C, m2.T2.CO2.d13C, m3.T2.CO2.d13C)
+#global smooth best
+
+summary(m3.T2.CO2.d13C)
+anova.gam(m3.T2.CO2.d13C)
+gam.check(m3.T2.CO2.d13C, rep=1000)
+draw(m3.T2.CO2.d13C)
+concrvity(m3.T2.CO2.d13C)
+par(mfrow = c(1, 2))
+plot(m3.T2.CO2.d13C, all.terms = TRUE, page=1)
+
+# model predictions
+CO2.d13C.diff.T2<-plot_difference(
+  m1.T2.CO2.d13C,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+CO2.d13C.T2.mod.plot<-
+  plot_smooths(
+  model = m3.T2.CO2.d13C,
+  series = plant.mass..g,
+)  + theme(legend.position = "none") +
+  geom_point(data=CO2[(CO2$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=d13C, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) +
+  ylab(expression(paste(delta^{13}, CO[2], " (\u2030, air)"))) +
+  geom_hline(yintercept=amb.CO2, linetype="dashed", color = "gray60")+
+  xlab("plant material (g)") +
+  ggtitle("Time-2") +
+  coord_cartesian(ylim=c(-30,0)) +
+  Fig.formatting +
+  theme(legend.key.size = unit(1,"line"))
+
+CO2.d13C.T2.mod.plot
+
+
+#### CO2 
+#######-- T3
+
+m1.T3.CO2.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g, by=Treatment), subset = Time.point=="T3", data = CO2,
+            method="REML", family="gaussian")
+
+m2.T3.CO2.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g), subset = Time.point=="T3", data = CO2,
+            method="REML", family="gaussian")
+
+m3.T3.CO2.d13C<- gam(d13C ~
+            s(plant.mass..g), subset = Time.point=="T3", data = CO2,
+            method="REML", family="gaussian")
+
+CO2.d13C.T3.AIC<-AIC(m1.T3.CO2.d13C, m2.T3.CO2.d13C, m3.T3.CO2.d13C)
+#factor smooth best
+
+summary(m1.T3.CO2.d13C)
+anova.gam(m1.T3.CO2.d13C)
+gam.check(m1.T3.CO2.d13C, rep=1000)
+draw(m1.T3.CO2.d13C)
+concrvity(m1.T3.CO2.d13C)
+par(mfrow = c(1, 2))
+plot(m1.T3.CO2.d13C, all.terms = TRUE, page=1)
+
+# model predictions
+CO2.d13C.diff.T3<-plot_difference(
+  m1.T3.CO2.d13C,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+CO2.d13C.T3.mod.plot<-
+  plot_smooths(
+  model = m1.T3.CO2.d13C,
+  series = plant.mass..g,
+  comparison= Treatment
+)  + theme(legend.position = "none") +
+  geom_point(data=CO2[(CO2$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=d13C, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) +
+  ylab(expression(paste(delta^{13}, CO[2], " (\u2030, air)"))) +
+  geom_hline(yintercept=amb.CO2, linetype="dashed", color = "gray60")+
+  xlab("plant material (g)") +
+  ggtitle("Time-3") +
+  coord_cartesian(ylim=c(-30, 0)) +
+  Fig.formatting +
+  theme(legend.key.size = unit(1,"line"))
+
+CO2.d13C.T3.mod.plot
+
+
+# models and raw data
+CO2.d13C.model.plots<-plot_grid(
+  CO2.d13C.T0.mod.plot+ theme(legend.position= "none") + ggtitle( "Day-0"),
+  CO2.d13C.T1.mod.plot+ theme(legend.position= "none") + ggtitle( "Day-10"),
+  CO2.d13C.T2.mod.plot+ theme(legend.position= "none") + ggtitle( "Day-31"),
+  CO2.d13C.T3.mod.plot+ theme(legend.position= "none") + ggtitle( "Day-59"),
+  extract.legend, 
+  rel_widths = c(8,8,8,8,3), ncol=5)
+
+### model differences
+CO2.d13C.plot.diff<-plot_grid(
+  CO2.d13C.diff.T0+ ggtitle("CO2-T0"),
+  CO2.d13C.diff.T1+ ggtitle("Day-10"),
+  CO2.d13C.diff.T2+ ggtitle("Day-31"),
+  CO2.d13C.diff.T3+ ggtitle("Day-59"),
+  rel_widths = c(8,8,8,8), ncol=4)
+
+## AIC table
+mod.ghg.CO2.d13C<-rep(c("Treatment +s(plant.mass..g, by=Treatment)", 
+              "Treatment + s(plant.mass..g)", 
+              "s(plant.mass..g)"), times=4)
+
+mod.ghg.d13C.df<- data.frame(mod.ghg.CO2.d13C)
+
+AIC.CO2.d13C<-bind_rows(CO2.d13C.T0.AIC, CO2.d13C.T1.AIC, CO2.d13C.T2.AIC, CO2.d13C.T3.AIC)
+AIC.CO2.d13C.mod<-cbind(mod.ghg.d13C.df, AIC.CO2.d13C)
+write.csv(AIC.CO2.d13C.mod, "output/AIC.CO2.d13C.mod.csv")
+
+```
+
+What does CH4-d13C look like?
+```{r CH4 model plots}
+############# GHG plots and models
+#### CH4
+CH4<-GHG[(GHG$Gas=="CH4"),]
+amb.CH4<- (-46.3 + -46.62 + -46.81)/3
+
+#######-- T0
+
+m1.T0.CH4.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g, by=Treatment), subset = Time.point=="T0", data = CH4,
+            method="REML", family="gaussian")
+
+m2.T0.CH4.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g), subset = Time.point=="T0", data = CH4,
+            method="REML", family="gaussian")
+
+m3.T0.CH4.d13C<- gam(d13C ~
+            s(plant.mass..g), subset = Time.point=="T0", data = CH4,
+            method="REML", family="gaussian")
+
+CH4.d13C.T0.AIC<-AIC(m1.T0.CH4.d13C, m2.T0.CH4.d13C, m3.T0.CH4.d13C)
+# global smooth best
+
+summary(m3.T0.CH4.d13C)
+anova.gam(m3.T0.CH4.d13C)
+gam.check(m3.T0.CH4.d13C, rep=1000)
+draw(m3.T0.CH4.d13C)
+concrvity(m3.T0.CH4.d13C)
+par(mfrow = c(1, 2))
+plot(m3.T0.CH4.d13C, all.terms = TRUE, page=1)
+
+# model predictions
+CH4.d13C.diff.T0<-plot_difference(
+  m1.T0.CH4.d13C,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+CH4.d13C.T0.mod.plot<-
+  plot_smooths(
+  model = m3.T0.CH4.d13C,
+  series = plant.mass..g
+)  + theme(legend.position = "none") +
+  geom_point(data=CH4[(CH4$Time.point=="T0"),], 
+             aes(x=plant.mass..g, y=d13C, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) +
+  ylab(expression(paste(delta^{13}, CH[4], " (\u2030, air)"))) +
+  geom_hline(yintercept=amb.CH4, linetype="dashed", color = "gray60")+
+  xlab("plant material (g)") +
+  ggtitle("Time-0") +
+  coord_cartesian(ylim=c(-50, -42)) +
+  Fig.formatting +
+  theme(legend.key.size = unit(1,"line"))
+
+CH4.d13C.T0.mod.plot
+
+#### CH4 
+#######-- T1
+
+m1.T1.CH4.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g, by=Treatment), subset = Time.point=="T1", data = CH4,
+            method="REML", family="gaussian")
+
+m2.T1.CH4.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g), subset = Time.point=="T1", data = CH4,
+            method="REML", family="gaussian")
+
+m3.T1.CH4.d13C<- gam(d13C ~
+            s(plant.mass..g), subset = Time.point=="T1", data = CH4,
+            method="REML", family="gaussian")
+
+CH4.d13C.T1.AIC<-AIC(m1.T1.CH4.d13C, m2.T1.CH4.d13C, m3.T1.CH4.d13C)
+#global smooth best
+
+summary(m3.T1.CH4.d13C)
+anova.gam(m3.T1.CH4.d13C)
+gam.check(m3.T1.CH4.d13C, rep=1000)
+draw(m3.T1.CH4.d13C)
+concrvity(m3.T1.CH4.d13C)
+par(mfrow = c(1, 2))
+plot(m3.T1.CH4.d13C, all.terms = TRUE, page=1)
+
+# model predictions
+CH4.d13C.diff.T1<-plot_difference(
+  m1.T1.CH4.d13C,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+CH4.d13C.T1.mod.plot<-
+  plot_smooths(
+  model = m3.T1.CH4.d13C,
+  series = plant.mass..g,
+)  + theme(legend.position = "none") +
+  geom_point(data=CH4[(CH4$Time.point=="T1"),], 
+             aes(x=plant.mass..g, y=d13C, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) +
+  ylab(expression(paste(delta^{13}, CH[4], " (\u2030, air)"))) +
+  geom_hline(yintercept=amb.CH4, linetype="dashed", color = "gray60")+
+  xlab("plant material (g)") +
+  ggtitle("Time-1") +
+  coord_cartesian(ylim=c(-50, -42)) +
+  Fig.formatting +
+  theme(legend.key.size = unit(1,"line"))
+
+CH4.d13C.T1.mod.plot
+
+#### CH4
+#######-- T2
+
+
+m1.T2.CH4.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g, by=Treatment), subset = Time.point=="T2", data = CH4,
+            method="REML", family="gaussian")
+
+m2.T2.CH4.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g), subset = Time.point=="T2", data = CH4,
+            method="REML", family="gaussian")
+
+m3.T2.CH4.d13C<- gam(d13C ~
+            s(plant.mass..g), subset = Time.point=="T2", data = CH4,
+            method="REML", family="gaussian")
+
+CH4.d13C.T2.AIC<-AIC(m1.T2.CH4.d13C, m2.T2.CH4.d13C, m3.T2.CH4.d13C)
+#global smooth best
+
+summary(m3.T2.CH4.d13C)
+anova.gam(m3.T2.CH4.d13C)
+gam.check(m3.T2.CH4.d13C, rep=1000)
+draw(m3.T2.CH4.d13C)
+concrvity(m3.T2.CH4.d13C)
+par(mfrow = c(1, 2))
+plot(m3.T2.CH4.d13C, all.terms = TRUE, page=1)
+
+# model predictions
+CH4.d13C.diff.T2<-plot_difference(
+  m1.T2.CH4.d13C,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+CH4.d13C.T2.mod.plot<-
+  plot_smooths(
+  model = m3.T2.CH4.d13C,
+  series = plant.mass..g,
+)  + theme(legend.position = "none") +
+  geom_point(data=CH4[(CH4$Time.point=="T2"),], 
+             aes(x=plant.mass..g, y=d13C, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) +
+  ylab(expression(paste(delta^{13}, CH[4], " (\u2030, air)"))) +
+  geom_hline(yintercept=amb.CH4, linetype="dashed", color = "gray60")+
+  xlab("plant material (g)") +
+  ggtitle("Time-2") +
+  coord_cartesian(ylim=c(-50, -42)) +
+  Fig.formatting +
+  theme(legend.key.size = unit(1,"line"))
+
+CH4.d13C.T2.mod.plot
+
+
+#### CH4 
+#######-- T3
+
+m1.T3.CH4.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g, by=Treatment), subset = Time.point=="T3", data = CH4,
+            method="REML", family="gaussian")
+
+m2.T3.CH4.d13C<- gam(d13C ~ Treatment +
+            s(plant.mass..g), subset = Time.point=="T3", data = CH4,
+            method="REML", family="gaussian")
+
+m3.T3.CH4.d13C<- gam(d13C ~
+            s(plant.mass..g), subset = Time.point=="T3", data = CH4,
+            method="REML", family="gaussian")
+
+CH4.d13C.T3.AIC<-AIC(m1.T3.CH4.d13C, m2.T3.CH4.d13C, m3.T3.CH4.d13C)
+#factor smooth best
+
+summary(m1.T3.CH4.d13C)
+anova.gam(m1.T3.CH4.d13C)
+gam.check(m1.T3.CH4.d13C, rep=1000)
+draw(m1.T3.CH4.d13C)
+concrvity(m1.T3.CH4.d13C)
+par(mfrow = c(1, 2))
+plot(m1.T3.CH4.d13C, all.terms = TRUE, page=1)
+
+# model predictions
+CH4.d13C.diff.T3<-plot_difference(
+  m1.T3.CH4.d13C,
+  series = plant.mass..g,
+  difference = list(Treatment = c("burned", "unburned"))
+)
+
+###########  
+#plot for the model output on rawdata
+CH4.d13C.T3.mod.plot<-
+  plot_smooths(
+  model = m1.T3.CH4.d13C,
+  series = plant.mass..g,
+  comparison = Treatment
+)  + theme(legend.position = "none") +
+  geom_point(data=CH4[(CH4$Time.point=="T3"),], 
+             aes(x=plant.mass..g, y=d13C, color=Treatment)) +
+  scale_color_manual(values = c("brown1", "mediumseagreen")) +
+  ylab(expression(paste(delta^{13}, CH[4], " (\u2030, air)"))) +
+  geom_hline(yintercept=amb.CH4, linetype="dashed", color = "gray60")+
+  xlab("plant material (g)") +
+  ggtitle("Time-4") +
+  coord_cartesian(ylim=c(-50, -42)) +
+  Fig.formatting +
+  theme(legend.key.size = unit(1,"line"))
+
+CH4.d13C.T3.mod.plot
+
+
+# models and raw data
+CH4.d13C.model.plots<-plot_grid(
+  CH4.d13C.T0.mod.plot+ theme(legend.position= "none") + ggtitle( "Day-0"),
+  CH4.d13C.T1.mod.plot+ theme(legend.position= "none") + ggtitle( "Day-10"),
+  CH4.d13C.T2.mod.plot+ theme(legend.position= "none") + ggtitle( "Day-31"),
+  CH4.d13C.T3.mod.plot+ theme(legend.position= "none") + ggtitle( "Day-59"),
+  extract.legend, 
+  rel_widths = c(8,8,8,8,3), ncol=5)
+
+### model differences
+CH4.d13C.plot.diff<-plot_grid(
+  CH4.d13C.diff.T0+ ggtitle("CH4-T0"),
+  CH4.d13C.diff.T1+ ggtitle("Day-10"),
+  CH4.d13C.diff.T2+ ggtitle("Day-31"),
+  CH4.d13C.diff.T3+ ggtitle("Day-59"),
+  rel_widths = c(8,8,8,8), ncol=4)
+
+## AIC table
+mod.ghg.CH4.d13C<-rep(c("Treatment +s(plant.mass..g, by=Treatment)", 
+              "Treatment + s(plant.mass..g)", 
+              "s(plant.mass..g)"), times=4)
+
+mod.ghg.d13C.df<- data.frame(mod.ghg.CH4.d13C)
+
+AIC.CH4.d13C<-bind_rows(CH4.d13C.T0.AIC, CH4.d13C.T1.AIC, CH4.d13C.T2.AIC, CH4.d13C.T3.AIC)
+AIC.CH4.d13C.mod<-cbind(mod.ghg.d13C.df, AIC.CH4.d13C)
+write.csv(AIC.CH4.d13C.mod, "output/AIC.CH4.d13C.mod.csv")
+
+```
+
+#Compile the greenhouse gas plots
+```{r combine CO2CH4.d13C plots}
+
+GHG.plots<-plot_grid(CO2.d13C.model.plots, CH4.d13C.model.plots, ncol=1)
+ggsave("figures/Final/figureS4.pdf", height=7, width=12, encod="MacRoman")
+
+
+GHG.plot.diff<-plot_grid(CO2.d13C.diff.T3, CH4.d13C.diff.T3, ncol=1)
+ggsave("figures/Final/figureS5.pdf", height=7, width=4, encod="MacRoman")
+
+
+```
+
